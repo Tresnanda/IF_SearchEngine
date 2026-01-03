@@ -84,7 +84,7 @@ class IndonesianPreprocessor:
             'dapat', 'juga', 'sebagai', 'tidak', 'ada', 'tersebut', 'sehingga'
         }
         
-        self.slang_dict = self._load_slang_dict('resouces/merged_slang_dict.json')
+        self.slang_dict = self._load_slang_dict('resources/merged_slang_dict.json')
         
     def _load_slang_dict(self, path) -> Dict[str, str]:
          try:
@@ -698,7 +698,7 @@ class HybridSearchEngine:
             # Show each correction clearly
             for original, suggestions in corrections.items():
                 if suggestions:
-                    print(f"  '{original}' → '{suggestions[0]}'")
+                    print(f"  '{original}' -> '{suggestions[0]}'")
 
             print(f"\n  Original query: {query}")
             print(f"  Corrected query: {corrected_query}")
@@ -1111,7 +1111,7 @@ if __name__ == "__main__":
     CONTENT_INDEX_PATH = "content_index.pkl"
     TITLE_INDEX_PATH = "title_index.pkl"
     FILTER_SECTIONS = True  # Set to False to index everything
-    MAX_DOCS = 20  # Limit to 100 documents as requested
+    MAX_DOCS = 100  # Limit to 100 documents as requested
 
     # Build or load hybrid index
     indexer = PDFCorpusIndexer(CORPUS_PATH)
