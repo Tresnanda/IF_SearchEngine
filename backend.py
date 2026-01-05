@@ -1,14 +1,22 @@
 from flask import Flask, jsonify, request, send_from_directory
 import os
 import pickle
-from main import HybridSearchEngine, InvertedIndex, PDFCorpusIndexer, SpellingCorrector, IndonesianPreprocessor
+import json
+from datetime import datetime
+# from main import HybridSearchEngine, InvertedIndex, PDFCorpusIndexer, SpellingCorrector, IndonesianPreprocessor
+from vsm import HybridSearchEngine
+from invertedindex import InvertedIndex
+from indexer import PDFCorpusIndexer
+from spellcorrector import SpellingCorrector
+from preprocessor import IndonesianPreprocessor
 
 app = Flask(__name__)
 
 # Configuration
 CONTENT_INDEX_PATH = "content_index.pkl"
 TITLE_INDEX_PATH = "title_index.pkl"
-DOWNLOADS_DIR = "downloads"  # Directory containing PDF files
+DOWNLOADS_DIR = "dataset"  # Directory containing PDF files
+FEEDBACK_LOG_PATH = "search_feedback_log.json"
 
 # Global engine variable
 engine = None
@@ -36,6 +44,51 @@ def load_engine():
     except Exception as e:
         print(f"Error loading engine: {e}")
         return False
+    
+@app.route('/feedback', methods=['POST'])
+def submit_feedback():
+    try:
+        data = request.json
+        
+        # Data yang diharapkan dari frontend:
+        # {
+        #   "query": "string",
+        #   "satisfied": boolean,
+        #   "relevant_count": int,
+        #   "total_results": int
+        # }
+        
+        feedback_entry = {
+            "timestamp": datetime.now().isoformat(),
+            "query": data.get('query'),
+            "satisfied": data.get('satisfied'),
+            "relevant_count": data.get('relevant_count'),
+            "total_displayed": data.get('total_results'),
+            # Hitung precision sederhana: relevant / total
+            "precision_score": data.get('relevant_count', 0) / max(data.get('total_results', 1), 1)
+        }
+
+        # Simpan ke file JSON (append mode)
+        existing_data = []
+        if os.path.exists(FEEDBACK_LOG_PATH):
+            try:
+                with open(FEEDBACK_LOG_PATH, 'r') as f:
+                    existing_data = json.load(f)
+            except:
+                existing_data = []
+        
+        existing_data.append(feedback_entry)
+        
+        with open(FEEDBACK_LOG_PATH, 'w') as f:
+            json.dump(existing_data, f, indent=4)
+
+        return jsonify({"status": "success", "message": "Feedback saved"})
+
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
 
 @app.route('/search', methods=['GET'])
 def search():
@@ -116,10 +169,8 @@ def search():
                     "title_score": title_score
                 })
 
-        # Sort by final score
         combined_scores.sort(key=lambda x: x['score'], reverse=True)
-        
-        # Take top 10
+
         response["data"] = combined_scores[:10]
         
         return jsonify(response)
@@ -145,3 +196,8 @@ if __name__ == '__main__':
         app.run(debug=True, host='0.0.0.0', port=5000)
     else:
         print("Failed to start application due to missing indices.")
+        CORPUS_PATH = "dataset"
+        indexer = PDFCorpusIndexer(CORPUS_PATH)
+        indexer.build_index(filter_sections=True, max_docs=150)
+        indexer.save_index(CONTENT_INDEX_PATH, TITLE_INDEX_PATH)
+        app.run(debug=True, host='0.0.0.0', port=5000)

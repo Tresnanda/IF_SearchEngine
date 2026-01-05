@@ -14,10 +14,16 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY backend.py .
 COPY main.py .
+copy compressor.py .
+copy indexer.py .
+copy invertedindex.py .
+copy preprocessor.py .
+copy spellcorrector.py .
+copy vsm.py .
 
 # Copy resources/directories
 COPY resources/ resources/
-COPY downloads/ downloads/
+COPY dataset/ downloads/
 
 # Copy index files
 COPY content_index.pkl .
