@@ -23,7 +23,7 @@ copy vsm.py .
 
 # Copy resources/directories
 COPY resources/ resources/
-COPY dataset/ downloads/
+COPY dataset/ dataset/
 
 # Copy index files
 COPY content_index.pkl .
