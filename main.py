@@ -14,11 +14,11 @@ from vsm import HybridSearchEngine
 # Main execution
 if __name__ == "__main__":
     # Configuration
-    CORPUS_PATH = "downloads"  # Using downloads directory
+    CORPUS_PATH = "dataset"  # Using downloads directory
     CONTENT_INDEX_PATH = "content_index.pkl"
     TITLE_INDEX_PATH = "title_index.pkl"
     FILTER_SECTIONS = True  # Set to False to index everything
-    MAX_DOCS = 100  # Limit to 100 documents as requested
+    MAX_DOCS = 342  # Limit to 100 documents as requested
 
     # Build or load hybrid index
     indexer = PDFCorpusIndexer(CORPUS_PATH)

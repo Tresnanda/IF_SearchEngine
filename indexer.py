@@ -138,12 +138,12 @@ class PDFCorpusIndexer:
         methodology = ""
         bab3_patterns = [
             r'\bbab\s*iii\b', r'\bbab\s*3\b',
-            r'metode penelitian', r'metodologi penelitian', r'methodology'
+            r'metode penelitian', r'metodologi penelitian', r'methodology', r'bab iii'
         ]
         bab4_5_boundaries = [
             r'\bbab\s*iv\b', r'\bbab\s*4\b',
             r'\bbab\s*v\b', r'\bbab\s*5\b',
-            r'hasil dan pembahasan', r'results and discussion'
+            r'hasil dan pembahasan', r'results and discussion', r'bab iv'
         ]
 
         start_m = min([text_lower.find(pat) for pat in bab3_patterns if text_lower.find(pat) != -1] or [len(text_lower)])
@@ -155,7 +155,7 @@ class PDFCorpusIndexer:
         conclusion = ""
         bab5_patterns = [
             r'\bbab\s*v\b', r'\bbab\s*5\b',
-            r'kesimpulan', r'conclusion', r'conclusions'
+            r'kesimpulan', r'conclusion', r'conclusions', r'bab v', r'hasil dan pembahasan'
         ]
         end_keywords = [
             'daftar pustaka', 'references', 'bibliography'

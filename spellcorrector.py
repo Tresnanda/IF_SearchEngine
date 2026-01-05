@@ -190,8 +190,11 @@ class SpellingCorrector:
         if not word or len(word) < 3:
             return []
 
-        # If word exists in vocabulary, no correction needed
-        if word in self.vocabulary:
+        # PERBAIKAN 1: Cek frekuensi kata.
+        # Jika kata ada di vocabulary TAPI tidak ada di unigram_counts (artinya jarang muncul/typo di corpus),
+        # maka kita tetap lanjutkan proses koreksi.
+        # Kita hanya return [] jika kata tersebut benar-benar valid (frekuensi > 0).
+        if word in self.vocabulary and self.unigram_counts.get(word, 0) > 0:
             return []
 
         suggestions = []
@@ -207,6 +210,12 @@ class SpellingCorrector:
 
         # Calculate scores for each candidate
         for candidate in candidates:
+            # PERBAIKAN 2: Abaikan kandidat yang sama persis dengan input JIKA kandidat tersebut frekuensinya 0/rendah.
+            # Ini mencegah 'sentime' (skor similarity 1.0) mengalahkan 'sentimen' (skor similarity 0.8) 
+            # hanya karena 'sentime' ada di index sebagai typo.
+            if candidate == word and self.unigram_counts.get(candidate, 0) == 0:
+                continue
+            
             distance = self.levenshtein_distance(word, candidate)
             max_length = max(len(word), len(candidate))
 
@@ -302,15 +311,14 @@ class SpellingCorrector:
             if len(token) >= 3:
                 # Get suggestions with context
                 suggestions = self.suggest_correction(token, prev_word=prev_word, next_word=next_word)
-                if suggestions:
-                    corrected_tokens.append(suggestions[0][0])  # Use the best suggestion
-                    # Store suggestions with context info
-                    corrections[token] = [s[0] for s in suggestions[:3]]  # Keep top 3 suggestions
+                
+                # Check if we have a valid correction that is DIFFERENT from the original token
+                if suggestions and suggestions[0][0] != token:
+                    corrected_tokens.append(suggestions[0][0])
+                    corrections[token] = [s[0] for s in suggestions[:3]]
                     was_corrected = True
                 else:
                     corrected_tokens.append(token)
-            else:
-                corrected_tokens.append(token)
 
         # Reconstruct the query with corrected words
         corrected_query = ' '.join(corrected_tokens)
