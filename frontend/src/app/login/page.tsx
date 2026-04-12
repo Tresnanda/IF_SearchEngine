@@ -45,6 +45,7 @@ export default function LoginPage() {
               className="w-full px-3 py-2 border border-zinc-200 rounded-md focus:outline-none focus:ring-1 focus:ring-zinc-950 focus:border-zinc-950" 
               placeholder="admin@informatika.unud.ac.id"
               required 
+              suppressHydrationWarning
             />
           </div>
           <div>
@@ -56,11 +57,13 @@ export default function LoginPage() {
               className="w-full px-3 py-2 border border-zinc-200 rounded-md focus:outline-none focus:ring-1 focus:ring-zinc-950 focus:border-zinc-950" 
               placeholder="password"
               required 
+              suppressHydrationWarning
             />
           </div>
           <button 
             type="submit" 
             className="w-full py-2 px-4 bg-zinc-950 hover:bg-zinc-800 text-white text-sm font-medium rounded-md transition-colors mt-2"
+            suppressHydrationWarning
           >
             Sign In
           </button>

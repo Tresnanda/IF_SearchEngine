@@ -40,6 +40,7 @@ export default function Home() {
                         onChange={(e) => setQuery(e.target.value)}
                         placeholder="Search academic corpus..."
                         className="w-full pl-12 pr-4 py-5 text-zinc-900 bg-transparent text-lg placeholder:text-zinc-400 focus:outline-none focus:ring-0"
+                        suppressHydrationWarning
                     />
                     <div className="absolute right-4 flex items-center gap-2">
                         {loading && (
@@ -48,6 +49,7 @@ export default function Home() {
                         <button 
                             type="submit"
                             className="hidden sm:flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-zinc-500 bg-zinc-100 rounded-md hover:bg-zinc-200 transition-colors"
+                            suppressHydrationWarning
                         >
                             <kbd className="font-sans">↵</kbd>
                             Enter
