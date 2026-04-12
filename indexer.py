@@ -1,4 +1,5 @@
 import PyPDF2
+import docx
 import re
 from preprocessor import IndonesianPreprocessor
 from invertedindex import InvertedIndex
@@ -6,8 +7,8 @@ import os
 from collections import defaultdict, Counter
 import pickle
 
-class PDFCorpusIndexer:
-    """Index PDF corpus and build inverted index"""
+class DocumentCorpusIndexer:
+    """Index PDF and DOCX corpus and build inverted index"""
 
     def __init__(self, corpus_path: str):
         self.corpus_path = corpus_path
@@ -16,6 +17,18 @@ class PDFCorpusIndexer:
         self.title_index = InvertedIndex()
         self.doc_id_counter = 0
     
+    def extract_text_from_docx(self, docx_path: str) -> str:
+        """Extract all text from a DOCX file"""
+        full_text = ""
+        try:
+            doc = docx.Document(docx_path)
+            for para in doc.paragraphs:
+                full_text += para.text + " \n "
+        except Exception as e:
+            print(f"Error reading {docx_path}: {e}")
+            return ""
+        return full_text
+
     def extract_abstract_from_pdf(self, pdf_path: str) -> str:
         """Extract only abstract section from PDF file"""
         full_text = ""
@@ -211,14 +224,14 @@ class PDFCorpusIndexer:
         return text
 
     
-    def extract_title(self, text: str, filename: str) -> str:
-        """Extract title from document filename (without .pdf extension)"""
-        # Extract title from filename by removing .pdf extension
-        title = filename.replace('.pdf', '')
+    def extract_title(self, filename: str) -> str:
+        """Extract title from document filename (without extension)"""
+        # Extract title from filename by removing extension
+        title = re.sub(r'\.(pdf|docx|doc)$', '', filename, flags=re.IGNORECASE)
         return title
     
     def build_index(self, filter_sections: bool = True, max_docs: int = None):
-        """Build inverted index from PDF corpus with content and title separation
+        """Build inverted index from Document corpus with content and title separation
 
         Args:
             filter_sections: If True, skip common non-content sections
@@ -227,32 +240,52 @@ class PDFCorpusIndexer:
         print("Starting hybrid indexing process (Abstract-based + Title-based)...")
         print(f"Max documents: {max_docs if max_docs else 'ALL'}")
 
-        pdf_files = [f for f in os.listdir(self.corpus_path) if f.endswith('.pdf')]
+        doc_files = [f for f in os.listdir(self.corpus_path) if f.endswith(('.pdf', '.docx', '.doc'))]
 
         # Limit number of documents if specified
         if max_docs:
-            pdf_files = pdf_files[:max_docs]
+            doc_files = doc_files[:max_docs]
 
-        total_files = len(pdf_files)
+        total_files = len(doc_files)
 
         # Temporary posting lists for content and title
         temp_content_index = defaultdict(list)
         temp_title_index = defaultdict(list)
 
-        for idx, filename in enumerate(pdf_files):
+        for idx, filename in enumerate(doc_files):
             print(f"Processing [{idx+1}/{total_files}]: {filename}")
 
-            pdf_path = os.path.join(self.corpus_path, filename)
-            abstract = self.extract_abstract_from_pdf(pdf_path)
+            file_path = os.path.join(self.corpus_path, filename)
+            
+            abstract = ""
+            combined_text = ""
+            
+            if filename.lower().endswith('.pdf'):
+                abstract = self.extract_abstract_from_pdf(file_path)
+                combined_text = self.extract_core_sections(file_path)
+            elif filename.lower().endswith('.docx'):
+                full_text = self.extract_text_from_docx(file_path)
+                abstract = self._extract_abstract_section(full_text)
+                # For docx, we'll just index the full text for now or abstract if found.
+                # Actually, let's just use full text for methodology/conclusion since regex might miss docx headers
+                # We'll just rely on the whole text, or try to be smart
+                if abstract:
+                    combined_text = abstract # If abstract is explicitly found, use it
+                else:
+                    # If no abstract, just use the first 5000 characters as a summary
+                    combined_text = full_text[:5000]
 
-            combined_text = self.extract_core_sections(pdf_path)
-            if not combined_text.strip():
+            if not combined_text.strip() and filename.lower().endswith('.pdf'):
                 print(f"  No main sections found, skipping...")
                 continue
-
+            
+            # If docx didn't yield text, skip
+            if not combined_text.strip():
+                print(f"  No text extracted from DOCX, skipping...")
+                continue
 
             # Extract title from filename
-            title = self.extract_title(abstract, filename)
+            title = self.extract_title(filename)
 
             # Preprocess abstract as content
             content_tokens = self.preprocessor.preprocess(combined_text)
@@ -267,12 +300,12 @@ class PDFCorpusIndexer:
             self.content_index.doc_metadata[self.doc_id_counter] = {
                 'filename': filename,
                 'title': title,
-                'path': pdf_path
+                'path': file_path
             }
             self.title_index.doc_metadata[self.doc_id_counter] = {
                 'filename': filename,
                 'title': title,
-                'path': pdf_path
+                'path': file_path
             }
 
             # Process content tokens

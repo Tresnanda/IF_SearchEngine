@@ -1,21 +1,25 @@
 from flask import Flask, jsonify, request, send_from_directory
+from flask_cors import CORS
 import os
 import pickle
 import json
+import docx
+import PyPDF2
 from datetime import datetime
 # from main import HybridSearchEngine, InvertedIndex, PDFCorpusIndexer, SpellingCorrector, IndonesianPreprocessor
 from vsm import HybridSearchEngine
 from invertedindex import InvertedIndex
-from indexer import PDFCorpusIndexer
+from indexer import DocumentCorpusIndexer
 from spellcorrector import SpellingCorrector
 from preprocessor import IndonesianPreprocessor
 
 app = Flask(__name__)
+CORS(app) # Enable CORS for Next.js frontend
 
 # Configuration
 CONTENT_INDEX_PATH = "content_index.pkl"
 TITLE_INDEX_PATH = "title_index.pkl"
-DOWNLOADS_DIR = "dataset"  # Directory containing PDF files
+DOWNLOADS_DIR = "new_dataset"  # Directory containing docx files
 FEEDBACK_LOG_PATH = "search_feedback_log.json"
 
 # Global engine variable
@@ -45,6 +49,48 @@ def load_engine():
         print(f"Error loading engine: {e}")
         return False
     
+def extract_snippet(file_path, query_terms, context_words=15):
+    """Extract a small text snippet around the matched query terms."""
+    if not os.path.exists(file_path):
+        return ""
+        
+    text = ""
+    try:
+        if file_path.lower().endswith('.docx'):
+            doc = docx.Document(file_path)
+            for para in doc.paragraphs:
+                text += para.text + " "
+        elif file_path.lower().endswith('.pdf'):
+            with open(file_path, 'rb') as file:
+                pdf_reader = PyPDF2.PdfReader(file)
+                for page in pdf_reader.pages[:10]: # Only search first 10 pages for snippet to be fast
+                    text += page.extract_text() + " "
+    except Exception:
+        return ""
+
+    text_lower = text.lower()
+    best_idx = -1
+    
+    # Find the first occurrence of any query term
+    for term in query_terms:
+        idx = text_lower.find(term.lower())
+        if idx != -1:
+            best_idx = idx
+            break
+            
+    if best_idx == -1:
+        return text[:200] + "..." # Fallback
+        
+    # Extract surrounding text
+    start_idx = max(0, best_idx - 100)
+    end_idx = min(len(text), best_idx + 100)
+    
+    snippet = text[start_idx:end_idx].strip()
+    if start_idx > 0: snippet = "..." + snippet
+    if end_idx < len(text): snippet = snippet + "..."
+    
+    return snippet
+
 @app.route('/feedback', methods=['POST'])
 def submit_feedback():
     try:
@@ -137,11 +183,11 @@ def search():
         
         # Get content-based scores
         content_results = engine.content_model.search(final_query, top_k=20)
-        content_scores = {doc_id: score for doc_id, score, _ in content_results}
+        content_scores = {res[0]: res[1] for res in content_results}
 
         # Get title-based scores
         title_results = engine.title_model.search(final_query, top_k=20)
-        title_scores = {doc_id: score for doc_id, score, _ in title_results}
+        title_scores = {res[0]: res[1] for res in title_results}
 
         # Combine scores
         all_docs = set(content_scores.keys()) | set(title_scores.keys())
@@ -160,13 +206,19 @@ def search():
                 metadata = engine.content_index.doc_metadata.get(doc_id, {})
                 title = metadata.get("title", "Unknown")
                 filename = metadata.get("filename", "Unknown")
+                file_path = metadata.get("path", "")
+                
+                # Fetch snippet context
+                query_terms = engine.preprocessor.preprocess(final_query)
+                snippet = extract_snippet(file_path, query_terms) if file_path else ""
                 
                 combined_scores.append({
                     "title": title,
                     "filename": filename,
                     "score": final_score,
                     "content_score": content_score,
-                    "title_score": title_score
+                    "title_score": title_score,
+                    "snippet": snippet
                 })
 
         combined_scores.sort(key=lambda x: x['score'], reverse=True)
@@ -196,8 +248,8 @@ if __name__ == '__main__':
         app.run(debug=True, host='0.0.0.0', port=5000)
     else:
         print("Failed to start application due to missing indices.")
-        CORPUS_PATH = "dataset"
-        indexer = PDFCorpusIndexer(CORPUS_PATH)
+        CORPUS_PATH = "new_dataset"
+        indexer = DocumentCorpusIndexer(CORPUS_PATH)
         indexer.build_index(filter_sections=True, max_docs=150)
         indexer.save_index(CONTENT_INDEX_PATH, TITLE_INDEX_PATH)
         app.run(debug=True, host='0.0.0.0', port=5000)

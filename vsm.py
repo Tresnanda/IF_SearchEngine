@@ -5,96 +5,76 @@ from typing import List, Dict, Tuple, Set
 from spellcorrector import SpellingCorrector
 from collections import defaultdict, Counter
 
-class TFIDFVectorSpaceModel:
-    """Vector Space Model with TF-IDF weighting"""
+class BM25Model:
+    """Vector Space Model with Okapi BM25 weighting"""
     
-    def __init__(self, index: InvertedIndex):
+    def __init__(self, index: InvertedIndex, k1: float = 1.5, b: float = 0.75):
         self.index = index
         self.preprocessor = IndonesianPreprocessor()
-    
-    def compute_tf(self, freq: int, doc_length: int) -> float:
-        """Compute normalized term frequency"""
-        if doc_length == 0:
-            return 0
-        # Normalized TF
-        return freq / doc_length
-    
-    def compute_idf(self, term: str) -> float:
-        """Compute inverse document frequency"""
-        df = self.index.df.get(term, 0)
-        if df == 0:
-            return 0
-        return math.log10(self.index.num_docs / df)
-    
-    def compute_tfidf(self, term: str, doc_id: int, freq: int) -> float:
-        """Compute TF-IDF weight"""
-        doc_length = self.index.doc_lengths.get(doc_id, 1)
-        tf = self.compute_tf(freq, doc_length)
-        idf = self.compute_idf(term)
-        return tf * idf
-    
-    def get_document_vector(self, doc_id: int) -> Dict[str, float]:
-        """Return the precomputed TF-IDF vector for doc_id (fast)."""
-        return self.index.doc_vectors.get(doc_id, {})
+        self.k1 = k1
+        self.b = b
+        self.avgdl = index.avg_doc_length if hasattr(index, 'avg_doc_length') and index.avg_doc_length else 1.0
 
-    
-    def get_query_vector(self, query_terms: List[str]) -> Dict[str, float]:
-        """Get TF-IDF vector for a query"""
-        term_freqs = Counter(query_terms)
-        query_length = len(query_terms)
+    def compute_idf(self, term: str) -> float:
+        """Compute BM25 inverse document frequency"""
+        df = self.index.df.get(term, 0)
+        N = self.index.num_docs
+        # Standard BM25 IDF formula
+        idf = math.log(1 + (N - df + 0.5) / (df + 0.5))
+        return max(0, idf) # Ensure IDF is not negative
+
+    def score_document(self, query_terms: List[str], doc_id: int) -> float:
+        """Calculate BM25 score for a single document given query terms"""
+        score = 0.0
+        doc_length = self.index.doc_lengths.get(doc_id, self.avgdl)
         
-        vector = {}
-        for term, freq in term_freqs.items():
-            if term in self.index.df:
-                tf = freq / query_length
-                idf = self.compute_idf(term)
-                vector[term] = tf * idf
-        
-        return vector
-    
-    def cosine_similarity(self, vec1: Dict[str, float], vec2: Dict[str, float]) -> float:
-        """Compute cosine similarity between two vectors"""
-        # Compute dot product
-        dot_product = sum(vec1.get(term, 0) * vec2.get(term, 0) for term in set(vec1) | set(vec2))
-        
-        # Compute magnitudes
-        mag1 = math.sqrt(sum(w ** 2 for w in vec1.values()))
-        mag2 = math.sqrt(sum(w ** 2 for w in vec2.values()))
-        
-        if mag1 == 0 or mag2 == 0:
-            return 0
-        
-        return dot_product / (mag1 * mag2)
-    
+        for term in query_terms:
+            if term not in self.index.index:
+                continue
+                
+            # Find term frequency in this document
+            tf = 0
+            postings = self.index.get_postings(term) # Handle compressed index format
+            for d_id, freq in postings:
+                if d_id == doc_id:
+                    tf = freq
+                    break
+                    
+            if tf == 0:
+                continue
+                
+            idf = self.compute_idf(term)
+            
+            # BM25 Term Frequency weighting
+            numerator = tf * (self.k1 + 1)
+            denominator = tf + self.k1 * (1 - self.b + self.b * (doc_length / self.avgdl))
+            
+            score += idf * (numerator / denominator)
+            
+        return score
+
     def search(self, query: str, top_k: int = 10):
         query_terms = self.preprocessor.preprocess(query)
-        print("Query terms:", query_terms)
         
         if not query_terms:
             return []
 
-        query_vector = self.get_query_vector(query_terms)
-        print("Query vector:", query_vector)
-
+        # Find candidate documents (documents containing at least one query term)
         candidate_docs = set()
         for term in query_terms:
-            postings = self.index.get_postings(term)
-            print(f"{term} postings:", postings)
-            candidate_docs.update(doc_id for doc_id, _ in postings)
+            if term in self.index.index:
+                postings = self.index.get_postings(term) # Handle compressed index format
+                candidate_docs.update(doc_id for doc_id, _ in postings)
 
-        print("Candidate docs:", candidate_docs)
         scores = []
         for doc_id in candidate_docs:
-            doc_vector = self.get_document_vector(doc_id)
-            # print(f"Doc vector {doc_id}:", doc_vector)
-            similarity = self.cosine_similarity(query_vector, doc_vector)
-            # print(f"Sim({doc_id}) =", similarity)
-            if similarity > 0:
+            score = self.score_document(query_terms, doc_id)
+            if score > 0:
                 title = self.index.doc_metadata.get(doc_id, {}).get("title", "Unknown")
-                scores.append((doc_id, similarity, title))
+                scores.append((doc_id, score, title))
+                
         scores.sort(key=lambda x: x[1], reverse=True)
         return scores[:top_k]
-
 
 class HybridSearchEngine:
     """Hybrid search engine combining content-based and title-based retrieval"""
@@ -105,8 +85,8 @@ class HybridSearchEngine:
         self.preprocessor = IndonesianPreprocessor()
 
         # Create separate TF-IDF models for content and title
-        self.content_model = TFIDFVectorSpaceModel(content_index)
-        self.title_model = TFIDFVectorSpaceModel(title_index)
+        self.content_model = BM25Model(content_index)
+        self.title_model = BM25Model(title_index, k1=2.0, b=0.2) # Lower b for title to not penalize long titles too much
 
         # Weight parameters for hybrid scoring (tunable) - title gets higher weight
         self.content_weight = 0.3
@@ -160,11 +140,11 @@ class HybridSearchEngine:
 
         # Get content-based scores
         content_results = self.content_model.search(final_query, top_k=top_k*2)  # Get more for better combination
-        content_scores = {doc_id: score for doc_id, score, _ in content_results}
+        content_scores = {res[0]: res[1] for res in content_results}
 
         # Get title-based scores
         title_results = self.title_model.search(final_query, top_k=top_k*2)
-        title_scores = {doc_id: score for doc_id, score, _ in title_results}
+        title_scores = {res[0]: res[1] for res in title_results}
 
         # Combine scores from both indices
         all_docs = set(content_scores.keys()) | set(title_scores.keys())

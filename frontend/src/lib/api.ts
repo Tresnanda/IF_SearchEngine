@@ -4,6 +4,7 @@ export interface SearchResult {
     score: number;
     content_score: number;
     title_score: number;
+    snippet?: string;
 }
 
 export interface SearchResponse {
