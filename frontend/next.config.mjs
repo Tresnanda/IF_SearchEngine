@@ -1,8 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
     rewrites: async () => {
-        const isDev = process.env.NODE_ENV === 'development';
-        const backendUrl = process.env.BACKEND_URL || (isDev ? 'http://localhost:5000' : 'http://backend:5000');
+        const backendUrl = process.env.BACKEND_URL || 'http://127.0.0.1:5000';
         console.log('Using Backend URL:', backendUrl);
         return [
             {

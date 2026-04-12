@@ -317,13 +317,13 @@ def require_admin_token(f):
         return f(*args, **kwargs)
     return decorated_function
 
-@app.route('/api/admin/repository', methods=['GET'])
+@app.route('/admin/repository', methods=['GET'])
 @require_admin_token
 def get_repository():
     theses = Thesis.query.order_by(Thesis.upload_date.desc()).all()
     return jsonify([t.to_dict() for t in theses])
 
-@app.route('/api/admin/upload', methods=['POST'])
+@app.route('/admin/upload', methods=['POST'])
 @require_admin_token
 def upload_thesis():
     if 'file' not in request.files:
@@ -352,7 +352,7 @@ def upload_thesis():
         
     return jsonify({'error': 'Invalid file type'}), 400
 
-@app.route('/api/admin/delete/<int:id>', methods=['DELETE'])
+@app.route('/admin/delete/<int:id>', methods=['DELETE'])
 @require_admin_token
 def delete_thesis(id):
     thesis = Thesis.query.get_or_404(id)
@@ -366,7 +366,7 @@ def delete_thesis(id):
     
     return jsonify({'message': 'Thesis deleted successfully'})
 
-@app.route('/api/admin/index', methods=['POST'])
+@app.route('/admin/index', methods=['POST'])
 @require_admin_token
 def trigger_index():
     """Runs the indexing process synchronously and updates DB status."""
