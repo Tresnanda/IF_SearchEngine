@@ -1,5 +1,6 @@
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
+from flask_sqlalchemy import SQLAlchemy
 import os
 import pickle
 import json
@@ -21,6 +22,65 @@ CONTENT_INDEX_PATH = "content_index.pkl"
 TITLE_INDEX_PATH = "title_index.pkl"
 DOWNLOADS_DIR = "new_dataset"  # Directory containing docx files
 FEEDBACK_LOG_PATH = "search_feedback_log.json"
+
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///repository.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db = SQLAlchemy(app)
+
+class Thesis(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    title = db.Column(db.String(255), nullable=False)
+    filename = db.Column(db.String(255), unique=True, nullable=False)
+    uploader_email = db.Column(db.String(120), nullable=False, default="admin@informatika.unud.ac.id")
+    upload_date = db.Column(db.DateTime, default=datetime.utcnow)
+    is_indexed = db.Column(db.Boolean, default=False)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'title': self.title,
+            'filename': self.filename,
+            'uploader_email': self.uploader_email,
+            'upload_date': self.upload_date.isoformat() + "Z" if self.upload_date else None,
+            'is_indexed': self.is_indexed
+        }
+
+def sync_existing_files_to_db():
+    """Scans new_dataset/ and adds missing files to the SQLite DB."""
+    if not os.path.exists(DOWNLOADS_DIR):
+        os.makedirs(DOWNLOADS_DIR)
+        return
+        
+    existing_files = os.listdir(DOWNLOADS_DIR)
+    
+    # Simple title extraction: remove extension
+    def extract_title(filename):
+        return os.path.splitext(filename)[0]
+        
+    added_count = 0
+    for filename in existing_files:
+        if filename.endswith(('.pdf', '.docx', '.doc')):
+            # Check if it exists in DB
+            thesis = Thesis.query.filter_by(filename=filename).first()
+            if not thesis:
+                # We assume existing files are indexed since they were present during the last run
+                # but to be safe, we'll mark them True if content_index.pkl exists
+                is_indexed = os.path.exists(CONTENT_INDEX_PATH)
+                new_thesis = Thesis(
+                    title=extract_title(filename),
+                    filename=filename,
+                    is_indexed=is_indexed
+                )
+                db.session.add(new_thesis)
+                added_count += 1
+                
+    if added_count > 0:
+        db.session.commit()
+        print(f"Synced {added_count} existing files to the database.")
+
+with app.app_context():
+    db.create_all()
+    sync_existing_files_to_db()
 
 # Global engine variable
 engine = None
@@ -242,6 +302,90 @@ def serve_file(filename):
             "status": "error",
             "message": f"File not found: {str(e)}"
         }), 404
+
+import shutil
+
+ADMIN_SECRET_TOKEN = "super-secret-admin-token-123"
+
+def require_admin_token(f):
+    from functools import wraps
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        token = request.headers.get('X-Admin-Token')
+        if not token or token != ADMIN_SECRET_TOKEN:
+            return jsonify({'error': 'Unauthorized'}), 401
+        return f(*args, **kwargs)
+    return decorated_function
+
+@app.route('/api/admin/repository', methods=['GET'])
+@require_admin_token
+def get_repository():
+    theses = Thesis.query.order_by(Thesis.upload_date.desc()).all()
+    return jsonify([t.to_dict() for t in theses])
+
+@app.route('/api/admin/upload', methods=['POST'])
+@require_admin_token
+def upload_thesis():
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file part'}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No selected file'}), 400
+        
+    if file and file.filename.endswith(('.pdf', '.docx', '.doc')):
+        filename = file.filename
+        file_path = os.path.join(DOWNLOADS_DIR, filename)
+        
+        # Check if already exists in DB
+        existing = Thesis.query.filter_by(filename=filename).first()
+        if existing:
+            return jsonify({'error': 'File already exists in repository'}), 409
+            
+        file.save(file_path)
+        
+        title = os.path.splitext(filename)[0]
+        new_thesis = Thesis(title=title, filename=filename, is_indexed=False)
+        db.session.add(new_thesis)
+        db.session.commit()
+        
+        return jsonify({'message': 'File uploaded successfully', 'thesis': new_thesis.to_dict()}), 201
+        
+    return jsonify({'error': 'Invalid file type'}), 400
+
+@app.route('/api/admin/delete/<int:id>', methods=['DELETE'])
+@require_admin_token
+def delete_thesis(id):
+    thesis = Thesis.query.get_or_404(id)
+    file_path = os.path.join(DOWNLOADS_DIR, thesis.filename)
+    
+    if os.path.exists(file_path):
+        os.remove(file_path)
+        
+    db.session.delete(thesis)
+    db.session.commit()
+    
+    return jsonify({'message': 'Thesis deleted successfully'})
+
+@app.route('/api/admin/index', methods=['POST'])
+@require_admin_token
+def trigger_index():
+    """Runs the indexing process synchronously and updates DB status."""
+    try:
+        # Import the indexer class defined in indexer.py
+        from indexer import DocumentCorpusIndexer
+        indexer = DocumentCorpusIndexer(DOWNLOADS_DIR)
+        indexer.build_index()
+        
+        # Reload the engine globally so search starts using new index immediately
+        load_engine()
+        
+        # Mark all files in DB as indexed
+        Thesis.query.update({Thesis.is_indexed: True})
+        db.session.commit()
+        
+        return jsonify({'message': 'Index rebuilt successfully'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     if load_engine():
