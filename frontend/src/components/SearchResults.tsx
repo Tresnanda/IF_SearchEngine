@@ -1,92 +1,84 @@
 'use client';
 
 import { SearchResult } from '@/lib/api';
-import { motion } from 'framer-motion';
-import { FileText, Download, Eye } from 'lucide-react';
-// Import komponen baru
+import { ExternalLink, Download } from 'lucide-react';
 import SearchFeedback from './SearchFeedback';
-// Asumsi kamu menambahkan prop 'query' dari parent juga untuk dikirim ke feedback
 import { useSearchParams } from 'next/navigation';
 
 interface SearchResultsProps {
     results: SearchResult[];
-    // Kita butuh query asli untuk dikirim ke log feedback
-    // Opsional: bisa pass query dari props, atau ambil dari URL param
 }
 
 export default function SearchResults({ results }: SearchResultsProps) {
-    // Ambil query dari URL parameter untuk keperluan logging
     const searchParams = useSearchParams();
     const query = searchParams.get('q') || '';
 
     if (results.length === 0) return null;
 
     return (
-        <div className="w-full max-w-5xl mx-auto space-y-6 pb-20">
-            {/* Bagian Header Hasil Search (KODE LAMA TETAP SAMA) */}
-            <div className="flex items-center justify-between px-2">
-                <h2 className="text-xl font-semibold text-gray-800 dark:text-gray-200">
-                    Search Results <span className="text-gray-400 font-normal">({results.length})</span>
-                </h2>
+        <div className="w-full flex flex-col">
+            {/* Header info */}
+            <div className="px-6 py-3 border-b border-zinc-100 flex justify-between items-center bg-white text-xs font-medium text-zinc-500 uppercase tracking-wider">
+                <span>Top Results</span>
+                <span>{results.length} documents</span>
             </div>
 
-            {/* Grid Hasil Search (KODE LAMA TETAP SAMA) */}
-            <div className="grid gap-6">
+            {/* Results List */}
+            <div className="divide-y divide-zinc-100 bg-white">
                 {results.map((result, index) => (
-                    <motion.div
+                    <div 
                         key={index}
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.4, delay: index * 0.1, ease: "easeOut" }}
-                        className="group relative glass-card rounded-2xl p-6 hover:-translate-y-1 hover:shadow-2xl overflow-hidden"
+                        className="p-6 hover:bg-zinc-50 transition-colors duration-150 group"
                     >
-                        {/* ... ISI KARTU TETAP SAMA SEPERTI FILE KAMU ... */}
-
-                        <div className="flex flex-col md:flex-row gap-6 relative z-10">
-                            {/* ... Konten Icon ... */}
-                            <div className="hidden md:flex flex-col items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 border border-blue-100 dark:border-blue-800 shrink-0">
-                                <FileText className="w-8 h-8 text-blue-600 dark:text-blue-400" />
-                            </div>
-
-                            {/* Content */}
+                        <div className="flex justify-between items-start gap-4">
+                            
+                            {/* Main Content */}
                             <div className="flex-1 min-w-0">
-                                <h3 className="text-xl font-bold text-gray-900 dark:text-white leading-tight mb-3 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+                                <h3 className="text-base font-semibold text-zinc-900 group-hover:text-blue-600 transition-colors leading-tight mb-1">
                                     {result.title}
                                 </h3>
-                                <div className="text-sm text-gray-500 mb-2">{result.filename}</div>
+                                
+                                <div className="flex items-center gap-3 text-xs text-zinc-500 mb-3">
+                                    <span className="font-mono bg-blue-50 text-blue-700 px-2 py-0.5 rounded border border-blue-100/50">
+                                        BM25: {result.score.toFixed(3)}
+                                    </span>
+                                    <span className="truncate">{result.filename}</span>
+                                </div>
 
-                                {/* Score pills, dll tetap sama */}
+                                {result.snippet && (
+                                    <div className="text-sm text-zinc-600 leading-relaxed border-l-2 border-zinc-200 pl-3">
+                                        <p className="line-clamp-3">{result.snippet}</p>
+                                    </div>
+                                )}
                             </div>
 
-                            {/* Actions Buttons tetap sama */}
-                            <div className="flex flex-row md:flex-col gap-2 shrink-0 pt-4 md:pt-0 justify-end md:justify-center">
-                                <div className="flex flex-row md:flex-col gap-2 shrink-0 pt-4 md:pt-0 border-t md:border-t-0 md:border-l border-gray-100 dark:border-gray-800 md:pl-6 justify-end md:justify-center">
-                                    <a
-                                        href={`/files/${result.filename}`}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gray-900 dark:bg-white text-white dark:text-gray-900 text-sm font-medium hover:bg-blue-600 dark:hover:bg-blue-100 transition-colors shadow-lg shadow-gray-200 dark:shadow-none"
-                                    >
-                                        <Eye className="w-4 h-4" />
-                                        View PDF
-                                    </a>
-                                    <a
-                                        href={`/files/${result.filename}`}
-                                        download
-                                        className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 text-sm font-medium hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-                                    >
-                                        <Download className="w-4 h-4" />
-                                        Save
-                                    </a>
-                                </div>
+                            {/* Actions (Hidden until hover on desktop, always visible on mobile) */}
+                            <div className="flex flex-col gap-2 shrink-0 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                                <a
+                                    href={`/files/${result.filename}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="flex items-center justify-center w-8 h-8 rounded text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 transition-colors"
+                                    title="View Document"
+                                >
+                                    <ExternalLink className="w-4 h-4" />
+                                </a>
+                                <a
+                                    href={`/files/${result.filename}`}
+                                    download
+                                    className="flex items-center justify-center w-8 h-8 rounded text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 transition-colors"
+                                    title="Download Document"
+                                >
+                                    <Download className="w-4 h-4" />
+                                </a>
                             </div>
                         </div>
-                    </motion.div>
+                    </div>
                 ))}
             </div>
 
-            {/* --- TAMBAHKAN INI DI BAGIAN BAWAH --- */}
-            <div className="pt-10 border-t border-gray-200 dark:border-gray-800 mt-10">
+            {/* Feedback Footer */}
+            <div className="bg-zinc-50 border-t border-zinc-200 p-6">
                 <SearchFeedback query={query} totalResults={results.length} />
             </div>
         </div>
