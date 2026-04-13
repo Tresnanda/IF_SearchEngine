@@ -20,3 +20,5 @@ test_drive.html
 .opencode/
 .superpowers/
 run_scraper*.sh
+data/
+instance/

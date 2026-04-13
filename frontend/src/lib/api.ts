@@ -5,6 +5,8 @@ export interface SearchResult {
     content_score: number;
     title_score: number;
     snippet?: string;
+    year?: string | null;
+    domain?: string;
 }
 
 export interface SearchResponse {

@@ -10,6 +10,8 @@ export default function Home() {
     const [loading, setLoading] = useState(false);
     const [data, setData] = useState<SearchResponse | null>(null);
 
+    const querySuggestions = ['analisis sentimen', 'sistem informasi', 'kriptografi', 'convolutional neural network'];
+
     const handleSearch = async (e?: React.FormEvent) => {
         e?.preventDefault();
         if (!query.trim()) return;
@@ -56,6 +58,27 @@ export default function Home() {
                         </button>
                     </div>
                 </form>
+
+                {!loading && !data && (
+                    <div className="border-b border-zinc-100 bg-white px-6 py-3 text-xs text-zinc-500">
+                        <span className="mr-2 uppercase tracking-wide">Try:</span>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                            {querySuggestions.map((suggestion) => (
+                                <button
+                                    key={suggestion}
+                                    type="button"
+                                    className="rounded border border-zinc-200 bg-zinc-50 px-2 py-1 text-zinc-600 hover:bg-zinc-100"
+                                    onClick={() => {
+                                        setQuery(suggestion);
+                                        void handleSearch();
+                                    }}
+                                >
+                                    {suggestion}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                )}
 
                 {/* Results Area */}
                 <div className="bg-zinc-50/50">

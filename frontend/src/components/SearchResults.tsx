@@ -4,6 +4,9 @@ import { SearchResult } from '@/lib/api';
 import { ExternalLink, Download } from 'lucide-react';
 import SearchFeedback from './SearchFeedback';
 import { useSearchParams } from 'next/navigation';
+import SearchFilters from './SearchFilters';
+import ResultExplainability from './ResultExplainability';
+import { useMemo, useState } from 'react';
 
 interface SearchResultsProps {
     results: SearchResult[];
@@ -12,20 +15,54 @@ interface SearchResultsProps {
 export default function SearchResults({ results }: SearchResultsProps) {
     const searchParams = useSearchParams();
     const query = searchParams.get('q') || '';
+    const [selectedYear, setSelectedYear] = useState('all');
+    const [selectedDomain, setSelectedDomain] = useState('all');
+
+    const years = useMemo(() => {
+        const unique = new Set<string>();
+        for (const result of results) {
+            if (result.year) unique.add(result.year);
+        }
+        return Array.from(unique).sort((a, b) => b.localeCompare(a));
+    }, [results]);
+
+    const domains = useMemo(() => {
+        const unique = new Set<string>();
+        for (const result of results) {
+            if (result.domain) unique.add(result.domain);
+        }
+        return Array.from(unique).sort();
+    }, [results]);
+
+    const filteredResults = useMemo(() => {
+        return results.filter((result) => {
+            const yearMatch = selectedYear === 'all' || result.year === selectedYear;
+            const domainMatch = selectedDomain === 'all' || result.domain === selectedDomain;
+            return yearMatch && domainMatch;
+        });
+    }, [results, selectedYear, selectedDomain]);
 
     if (results.length === 0) return null;
 
     return (
         <div className="w-full flex flex-col">
+            <SearchFilters
+                years={years}
+                domains={domains}
+                selectedYear={selectedYear}
+                selectedDomain={selectedDomain}
+                onYearChange={setSelectedYear}
+                onDomainChange={setSelectedDomain}
+            />
             {/* Header info */}
             <div className="px-6 py-3 border-b border-zinc-100 flex justify-between items-center bg-white text-xs font-medium text-zinc-500 uppercase tracking-wider">
                 <span>Top Results</span>
-                <span>{results.length} documents</span>
+                <span>{filteredResults.length} documents</span>
             </div>
 
             {/* Results List */}
             <div className="divide-y divide-zinc-100 bg-white">
-                {results.map((result, index) => (
+                {filteredResults.map((result, index) => (
                     <div 
                         key={index}
                         className="p-6 hover:bg-zinc-50 transition-colors duration-150 group"
@@ -50,6 +87,8 @@ export default function SearchResults({ results }: SearchResultsProps) {
                                         <p className="line-clamp-3">{result.snippet}</p>
                                     </div>
                                 )}
+
+                                <ResultExplainability result={result} />
                             </div>
 
                             {/* Actions (Hidden until hover on desktop, always visible on mobile) */}
@@ -79,7 +118,7 @@ export default function SearchResults({ results }: SearchResultsProps) {
 
             {/* Feedback Footer */}
             <div className="bg-zinc-50 border-t border-zinc-200 p-6">
-                <SearchFeedback query={query} totalResults={results.length} />
+                <SearchFeedback query={query} totalResults={filteredResults.length} />
             </div>
         </div>
     );

@@ -20,6 +20,8 @@ RUN npm run build
 
 # Set production environment for runtime
 ENV NODE_ENV=production
+ENV HOSTNAME=0.0.0.0
+ENV PORT=3000
 
 # Expose port
 EXPOSE 3000

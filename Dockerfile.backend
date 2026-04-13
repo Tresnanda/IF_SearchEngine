@@ -11,13 +11,18 @@ COPY requirements.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Runtime directories used by compose volumes/env
+RUN mkdir -p /app/new_dataset /app/data/index /app/instance
+
 # Copy application code
 COPY backend.py .
 COPY main.py .
 copy compressor.py .
 copy indexer.py .
 copy invertedindex.py .
+copy index_runtime.py .
 copy preprocessor.py .
+copy reindex_service.py .
 copy spellcorrector.py .
 copy vsm.py .
 

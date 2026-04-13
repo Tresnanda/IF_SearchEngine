@@ -4,6 +4,7 @@ from flask_sqlalchemy import SQLAlchemy
 import os
 import pickle
 import json
+from pathlib import Path
 import docx
 import PyPDF2
 from datetime import datetime
@@ -13,6 +14,8 @@ from invertedindex import InvertedIndex
 from indexer import DocumentCorpusIndexer
 from spellcorrector import SpellingCorrector
 from preprocessor import IndonesianPreprocessor
+from index_runtime import ActiveManifest, IndexRuntime
+from reindex_service import ReindexService
 
 app = Flask(__name__)
 CORS(app) # Enable CORS for Next.js frontend
@@ -22,10 +25,19 @@ CONTENT_INDEX_PATH = "content_index.pkl"
 TITLE_INDEX_PATH = "title_index.pkl"
 DOWNLOADS_DIR = "new_dataset"  # Directory containing docx files
 FEEDBACK_LOG_PATH = "search_feedback_log.json"
+INDEX_STORE_DIR = os.getenv("INDEX_STORE_DIR", "data/index")
 
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///repository.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
+
+index_runtime = IndexRuntime(base_dir=INDEX_STORE_DIR)
+index_runtime.bootstrap_if_missing(
+    seed_content_index_path=CONTENT_INDEX_PATH,
+    seed_title_index_path=TITLE_INDEX_PATH,
+)
+# Task 2 wiring only; admin endpoint integration follows in later tasks.
+reindex_service = ReindexService(runtime=index_runtime)
 
 class Thesis(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -84,30 +96,67 @@ with app.app_context():
 
 # Global engine variable
 engine = None
+engine_manifest_version = None
+
+
+def _load_pickle(path):
+    with open(path, 'rb') as f:
+        return pickle.load(f)
+
+
+def _build_engine_from_manifest(manifest):
+    content_index = _load_pickle(manifest.content_index_path)
+    title_index = _load_pickle(manifest.title_index_path)
+    return HybridSearchEngine(content_index, title_index)
 
 def load_engine():
-    global engine
-    
-    # Check if indices exist
-    if not os.path.exists(CONTENT_INDEX_PATH) or not os.path.exists(TITLE_INDEX_PATH):
-        print("Error: Index files not found. Please run main.py first to build indices.")
-        return False
-
+    global engine, engine_manifest_version
     try:
-        print("Loading content index...")
-        with open(CONTENT_INDEX_PATH, 'rb') as f:
-            content_index = pickle.load(f)
-            
-        print("Loading title index...")
-        with open(TITLE_INDEX_PATH, 'rb') as f:
-            title_index = pickle.load(f)
-            
-        print("Initializing Hybrid Search Engine...")
-        engine = HybridSearchEngine(content_index, title_index)
+        manifest = index_runtime.recover_active_manifest()
+        next_engine = _build_engine_from_manifest(manifest)
+        engine = next_engine
+        engine_manifest_version = manifest.version
         return True
     except Exception as e:
         print(f"Error loading engine: {e}")
         return False
+
+
+def _reload_engine_or_raise(_manifest):
+    if not load_engine():
+        raise RuntimeError("engine reload failed")
+
+
+def _mark_all_theses_indexed() -> None:
+    with app.app_context():
+        Thesis.query.update({Thesis.is_indexed: True})
+        db.session.commit()
+
+
+def _on_reindex_success(manifest) -> None:
+    _reload_engine_or_raise(manifest)
+    _mark_all_theses_indexed()
+
+
+def initialize_engine_for_startup() -> bool:
+    if load_engine():
+        return True
+
+    print("Failed to start application due to missing indices.")
+    indexer = DocumentCorpusIndexer(DOWNLOADS_DIR)
+    indexer.build_index(filter_sections=True, max_docs=150)
+    indexer.save_index(CONTENT_INDEX_PATH, TITLE_INDEX_PATH)
+
+    index_runtime.set_active_manifest(
+        ActiveManifest(
+            version=f"legacy-root-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}",
+            doc_count=indexer.content_index.num_docs,
+            built_at=datetime.utcnow().isoformat() + "Z",
+            content_index_path=Path(CONTENT_INDEX_PATH).resolve(),
+            title_index_path=Path(TITLE_INDEX_PATH).resolve(),
+        )
+    )
+    return load_engine()
     
 def extract_snippet(file_path, query_terms, context_words=15):
     """Extract a small text snippet around the matched query terms."""
@@ -150,6 +199,60 @@ def extract_snippet(file_path, query_terms, context_words=15):
     if end_idx < len(text): snippet = snippet + "..."
     
     return snippet
+
+
+def _select_snippet_terms(original_query: str, corrected_query: str | None) -> list[str]:
+    preferred_query = corrected_query if corrected_query else original_query
+    terms = IndonesianPreprocessor().preprocess(preferred_query)
+    if terms:
+        return terms
+    return IndonesianPreprocessor().preprocess(original_query)
+
+
+def _extract_year_from_title(title: str) -> str | None:
+    import re
+
+    match = re.search(r"\b(19|20)\d{2}\b", title)
+    return match.group(0) if match else None
+
+
+def _detect_domain_from_title(title: str) -> str:
+    lowered = title.lower()
+    domain_rules = [
+        ("sentiment", ["sentimen", "sentiment", "review", "opini"]),
+        ("security", ["enkripsi", "kriptografi", "rsa", "aes", "cipher", "keamanan"]),
+        ("computer vision", ["cnn", "resnet", "inception", "gambar", "vision"]),
+        ("nlp", ["text mining", "ontology", "token", "bahasa"]),
+        ("recommender", ["rekomendasi", "collaborative", "slope one"]),
+    ]
+
+    for label, keywords in domain_rules:
+        if any(keyword in lowered for keyword in keywords):
+            return label
+    return "other"
+
+
+def _expand_query_terms_for_recall(query_terms: list[str]) -> list[str]:
+    if not query_terms:
+        return []
+
+    synonym_map = {
+        "sentimen": ["sentiment", "opini"],
+        "sentiment": ["sentimen", "opini"],
+        "kriptografi": ["enkripsi", "cipher", "security"],
+        "enkripsi": ["kriptografi", "cipher", "security"],
+        "keamanan": ["security", "kriptografi"],
+        "sistem": ["system"],
+        "rekomendasi": ["recommendation", "collaborative"],
+        "collaborative": ["rekomendasi"],
+    }
+
+    expanded = list(query_terms)
+    for term in query_terms:
+        for synonym in synonym_map.get(term, []):
+            if synonym not in expanded:
+                expanded.append(synonym)
+    return expanded
 
 @app.route('/feedback', methods=['POST'])
 def submit_feedback():
@@ -209,11 +312,11 @@ def search():
     if not query:
         return jsonify(response)
         
-    if engine is None:
+    if engine is None and not load_engine():
         return jsonify({
             "status": "error",
-            "message": "Search engine not initialized"
-        }), 500
+            "message": "Search engine unavailable: failed to initialize index"
+        }), 503
 
     try:
         # 1. Spelling Correction
@@ -240,13 +343,16 @@ def search():
         # For now, sticking to user input for search, but providing suggestion.
         
         # Reuse logic from HybridSearchEngine.search but without print/input
+        query_terms = engine.preprocessor.preprocess(final_query)
+        expanded_terms = _expand_query_terms_for_recall(query_terms)
+        search_query = " ".join(expanded_terms) if expanded_terms else final_query
         
         # Get content-based scores
-        content_results = engine.content_model.search(final_query, top_k=20)
+        content_results = engine.content_model.search(search_query, top_k=30)
         content_scores = {res[0]: res[1] for res in content_results}
 
         # Get title-based scores
-        title_results = engine.title_model.search(final_query, top_k=20)
+        title_results = engine.title_model.search(search_query, top_k=30)
         title_scores = {res[0]: res[1] for res in title_results}
 
         # Combine scores
@@ -269,8 +375,11 @@ def search():
                 file_path = metadata.get("path", "")
                 
                 # Fetch snippet context
-                query_terms = engine.preprocessor.preprocess(final_query)
-                snippet = extract_snippet(file_path, query_terms) if file_path else ""
+                snippet_terms = _select_snippet_terms(
+                    original_query=final_query,
+                    corrected_query=response["correction"],
+                )
+                snippet = extract_snippet(file_path, snippet_terms) if file_path else ""
                 
                 combined_scores.append({
                     "title": title,
@@ -278,7 +387,9 @@ def search():
                     "score": final_score,
                     "content_score": content_score,
                     "title_score": title_score,
-                    "snippet": snippet
+                    "snippet": snippet,
+                    "year": _extract_year_from_title(title),
+                    "domain": _detect_domain_from_title(title),
                 })
 
         combined_scores.sort(key=lambda x: x['score'], reverse=True)
@@ -305,55 +416,120 @@ def serve_file(filename):
 
 import shutil
 
-ADMIN_SECRET_TOKEN = "super-secret-admin-token-123"
+ADMIN_INTERNAL_TOKEN = os.getenv("ADMIN_INTERNAL_TOKEN")
+if not ADMIN_INTERNAL_TOKEN:
+    raise RuntimeError("ADMIN_INTERNAL_TOKEN must be set")
+MAX_UPLOAD_SIZE_BYTES = int(os.getenv("MAX_UPLOAD_SIZE_BYTES", str(50 * 1024 * 1024)))
+ALLOWED_EXTENSIONS = {".pdf", ".docx"}
 
-def require_admin_token(f):
+
+def _build_indices(content_path: str, title_path: str) -> int:
+    indexer = DocumentCorpusIndexer(DOWNLOADS_DIR)
+    indexer.build_index()
+    indexer.save_index(content_path, title_path)
+    return indexer.content_index.num_docs
+
+
+def require_internal_admin_token(f):
     from functools import wraps
+
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        token = request.headers.get('X-Admin-Token')
-        if not token or token != ADMIN_SECRET_TOKEN:
+        token = request.headers.get("X-Internal-Admin-Token")
+        if not token or token != ADMIN_INTERNAL_TOKEN:
             return jsonify({'error': 'Unauthorized'}), 401
         return f(*args, **kwargs)
+
     return decorated_function
 
+
+@app.route('/health/live', methods=['GET'])
+def health_live():
+    return jsonify({'status': 'ok'}), 200
+
+
+@app.route('/health/ready', methods=['GET'])
+def health_ready():
+    global engine, engine_manifest_version
+    try:
+        manifest = index_runtime.read_active_manifest()
+        if not manifest.content_index_path.exists() or not manifest.title_index_path.exists():
+            raise RuntimeError("active index files are missing")
+
+        _load_pickle(manifest.content_index_path)
+        _load_pickle(manifest.title_index_path)
+
+        if engine is None or engine_manifest_version != manifest.version:
+            next_engine = _build_engine_from_manifest(manifest)
+            engine = next_engine
+            engine_manifest_version = manifest.version
+
+        ready = engine is not None and engine_manifest_version == manifest.version
+        state = reindex_service.status()
+        return jsonify({
+            'ready': ready,
+            'active_version': manifest.version,
+            'doc_count': manifest.doc_count,
+            'reindex_status': state.status,
+            'last_error': state.last_error,
+        }), (200 if ready else 503)
+    except Exception as exc:
+        state = reindex_service.status()
+        return jsonify({
+            'ready': False,
+            'active_version': None,
+            'doc_count': 0,
+            'reindex_status': state.status,
+            'last_error': state.last_error or str(exc),
+        }), 503
+
 @app.route('/admin/repository', methods=['GET'])
-@require_admin_token
+@require_internal_admin_token
 def get_repository():
     theses = Thesis.query.order_by(Thesis.upload_date.desc()).all()
     return jsonify([t.to_dict() for t in theses])
 
 @app.route('/admin/upload', methods=['POST'])
-@require_admin_token
+@require_internal_admin_token
 def upload_thesis():
     if 'file' not in request.files:
         return jsonify({'error': 'No file part'}), 400
+
     file = request.files['file']
-    if file.filename == '':
+    if not file.filename:
         return jsonify({'error': 'No selected file'}), 400
-        
-    if file and file.filename.endswith(('.pdf', '.docx', '.doc')):
-        filename = file.filename
-        file_path = os.path.join(DOWNLOADS_DIR, filename)
-        
-        # Check if already exists in DB
-        existing = Thesis.query.filter_by(filename=filename).first()
-        if existing:
-            return jsonify({'error': 'File already exists in repository'}), 409
-            
-        file.save(file_path)
-        
-        title = os.path.splitext(filename)[0]
-        new_thesis = Thesis(title=title, filename=filename, is_indexed=False)
-        db.session.add(new_thesis)
-        db.session.commit()
-        
-        return jsonify({'message': 'File uploaded successfully', 'thesis': new_thesis.to_dict()}), 201
-        
-    return jsonify({'error': 'Invalid file type'}), 400
+
+    filename = os.path.basename(file.filename)
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        return jsonify({'error': 'Invalid file type'}), 400
+
+    file.stream.seek(0, os.SEEK_END)
+    size = file.stream.tell()
+    file.stream.seek(0)
+    if size > MAX_UPLOAD_SIZE_BYTES:
+        return jsonify({'error': 'File exceeds size limit'}), 400
+
+    os.makedirs(DOWNLOADS_DIR, exist_ok=True)
+    file_path = os.path.join(DOWNLOADS_DIR, filename)
+    if os.path.exists(file_path):
+        return jsonify({'error': 'File already exists'}), 409
+
+    existing = Thesis.query.filter_by(filename=filename).first()
+    if existing:
+        return jsonify({'error': 'File already exists'}), 409
+
+    file.save(file_path)
+
+    title = os.path.splitext(filename)[0]
+    new_thesis = Thesis(title=title, filename=filename, is_indexed=False)
+    db.session.add(new_thesis)
+    db.session.commit()
+
+    return jsonify({'message': 'File uploaded successfully', 'thesis': new_thesis.to_dict()}), 201
 
 @app.route('/admin/delete/<int:id>', methods=['DELETE'])
-@require_admin_token
+@require_internal_admin_token
 def delete_thesis(id):
     thesis = Thesis.query.get_or_404(id)
     file_path = os.path.join(DOWNLOADS_DIR, thesis.filename)
@@ -367,33 +543,30 @@ def delete_thesis(id):
     return jsonify({'message': 'Thesis deleted successfully'})
 
 @app.route('/admin/index', methods=['POST'])
-@require_admin_token
+@app.route('/admin/reindex', methods=['POST'])
+@require_internal_admin_token
 def trigger_index():
-    """Runs the indexing process synchronously and updates DB status."""
-    try:
-        # Import the indexer class defined in indexer.py
-        from indexer import DocumentCorpusIndexer
-        indexer = DocumentCorpusIndexer(DOWNLOADS_DIR)
-        indexer.build_index()
-        
-        # Reload the engine globally so search starts using new index immediately
-        load_engine()
-        
-        # Mark all files in DB as indexed
-        Thesis.query.update({Thesis.is_indexed: True})
-        db.session.commit()
-        
-        return jsonify({'message': 'Index rebuilt successfully'})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    actor = request.headers.get('X-Admin-Actor', 'admin@informatika.unud.ac.id')
+    started, message = reindex_service.start(actor=actor, build_fn=_build_indices, on_success=_on_reindex_success)
+    if not started:
+        return jsonify({'error': message}), 409
+    return jsonify({'message': message}), 202
+
+
+@app.route('/admin/reindex/status', methods=['GET'])
+@require_internal_admin_token
+def get_reindex_status():
+    state = reindex_service.status()
+    return jsonify({
+        'status': state.status,
+        'actor': state.actor,
+        'started_at': state.started_at,
+        'finished_at': state.finished_at,
+        'last_error': state.last_error,
+        'active_version': state.active_version,
+        'last_doc_count': state.last_doc_count,
+    }), 200
 
 if __name__ == '__main__':
-    if load_engine():
-        app.run(debug=True, host='0.0.0.0', port=5000)
-    else:
-        print("Failed to start application due to missing indices.")
-        CORPUS_PATH = "new_dataset"
-        indexer = DocumentCorpusIndexer(CORPUS_PATH)
-        indexer.build_index(filter_sections=True, max_docs=150)
-        indexer.save_index(CONTENT_INDEX_PATH, TITLE_INDEX_PATH)
+    if initialize_engine_for_startup():
         app.run(debug=True, host='0.0.0.0', port=5000)
