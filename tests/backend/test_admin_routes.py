@@ -154,12 +154,33 @@ def test_upload_rejects_doc_extension(client, admin_headers):
 def test_reindex_while_running_returns_409(client, admin_headers, monkeypatch):
     from backend import reindex_service
 
-    def fake_start(actor, build_fn, on_success=None):
+    def fake_start(actor, build_fn, on_success=None, mode=None):
         return False, "reindex already running"
 
     monkeypatch.setattr(reindex_service, "start", fake_start)
     response = client.post("/admin/reindex", headers=admin_headers)
     assert response.status_code == 409
+
+
+def test_reindex_status_includes_mode_and_stats(client, admin_headers, monkeypatch):
+    class DummyState:
+        status = "succeeded"
+        mode = "incremental"
+        stats = {"created": 2, "updated": 1, "reused": 3, "deleted": 0}
+        actor = "admin@unud.ac.id"
+        started_at = "2026-01-01T00:00:00Z"
+        finished_at = "2026-01-01T00:00:10Z"
+        last_error = None
+        active_version = "v1"
+        last_doc_count = 6
+
+    monkeypatch.setattr("backend.reindex_service.status", lambda: DummyState)
+
+    response = client.get("/admin/reindex/status", headers=admin_headers)
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["mode"] == "incremental"
+    assert payload["stats"]["created"] == 2
 
 
 def test_startup_fallback_sets_active_manifest_to_legacy_root(monkeypatch, tmp_path: Path):

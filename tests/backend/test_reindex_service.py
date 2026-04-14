@@ -79,6 +79,30 @@ def test_successful_reindex_updates_state_and_active_manifest(tmp_path: Path):
     assert active.doc_count == 42
 
 
+def test_successful_reindex_exposes_mode_and_stats(tmp_path: Path):
+    runtime = IndexRuntime(tmp_path)
+    runtime.bootstrap_if_missing()
+    service = ReindexService(runtime=runtime)
+
+    def build_with_stats(content_path: str, title_path: str):
+        Path(content_path).write_bytes(b"content-v2")
+        Path(title_path).write_bytes(b"title-v2")
+        return 5, {"created": 2, "updated": 1, "reused": 2, "deleted": 0}
+
+    ok, _ = service.start(
+        actor="admin@unud.ac.id",
+        build_fn=build_with_stats,
+        mode="incremental",
+    )
+    assert ok is True
+
+    service.wait_for_idle(timeout_seconds=5)
+    state = service.status()
+    assert state.status == "succeeded"
+    assert state.mode == "incremental"
+    assert state.stats == {"created": 2, "updated": 1, "reused": 2, "deleted": 0}
+
+
 def test_callback_failure_after_promote_recovers_previous_active(tmp_path: Path):
     runtime = IndexRuntime(tmp_path)
     runtime.bootstrap_if_missing()

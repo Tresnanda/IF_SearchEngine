@@ -6,6 +6,8 @@ from invertedindex import InvertedIndex
 import os
 from collections import defaultdict, Counter
 import pickle
+import zipfile
+import xml.etree.ElementTree as ET
 
 class DocumentCorpusIndexer:
     """Index PDF and DOCX corpus and build inverted index"""
@@ -25,9 +27,25 @@ class DocumentCorpusIndexer:
             for para in doc.paragraphs:
                 full_text += para.text + " \n "
         except Exception as e:
+            fallback = self._extract_text_from_docx_zip(docx_path)
+            if fallback:
+                return fallback
             print(f"Error reading {docx_path}: {e}")
             return ""
         return full_text
+
+    def _extract_text_from_docx_zip(self, docx_path: str) -> str:
+        try:
+            with zipfile.ZipFile(docx_path) as archive:
+                xml_bytes = archive.read("word/document.xml")
+            root = ET.fromstring(xml_bytes)
+            parts = []
+            for node in root.iter():
+                if node.tag.endswith("}t") and node.text:
+                    parts.append(node.text)
+            return " ".join(parts)
+        except Exception:
+            return ""
 
     def extract_abstract_from_pdf(self, pdf_path: str) -> str:
         """Extract only abstract section from PDF file"""
@@ -142,6 +160,9 @@ class DocumentCorpusIndexer:
             print(f"Error reading {pdf_path}: {e}")
             return ""
 
+        return self._extract_core_sections_from_text(full_text)
+
+    def _extract_core_sections_from_text(self, full_text: str) -> str:
         text_lower = full_text.lower()
 
         # --- ABSTRACT ---
@@ -179,6 +200,18 @@ class DocumentCorpusIndexer:
             conclusion = full_text[start_c:end_c]
 
         # Combine all
+        if start_m != len(text_lower) and end_m == len(text_lower):
+            end_m = min(len(full_text), start_m + 15000)
+            methodology = full_text[start_m:end_m]
+
+        if start_c != len(text_lower) and end_c == len(text_lower):
+            end_c = min(len(full_text), start_c + 12000)
+            conclusion = full_text[start_c:end_c]
+
+        abstract = abstract[:5000]
+        methodology = methodology[:9000]
+        conclusion = conclusion[:7000]
+
         combined = " ".join([abstract, methodology, conclusion])
         combined = re.sub(r'\s+', ' ', combined)
         return combined.strip()

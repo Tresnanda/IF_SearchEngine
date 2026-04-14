@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from threading import Lock, Thread
 from time import monotonic, sleep
 from typing import Callable
+from typing import Any
 
 from index_runtime import ActiveManifest, IndexRuntime
 
@@ -18,6 +19,8 @@ class ReindexState:
     last_error: str | None = None
     active_version: str | None = None
     last_doc_count: int | None = None
+    mode: str | None = None
+    stats: dict[str, int] | None = None
 
 
 class ReindexService:
@@ -39,6 +42,7 @@ class ReindexService:
         actor: str,
         build_fn: Callable[[str, str], int],
         on_success: Callable[[ActiveManifest], None] | None = None,
+        mode: str | None = None,
     ) -> tuple[bool, str]:
         with self._lock:
             if self._state.status == "running":
@@ -49,6 +53,8 @@ class ReindexService:
             self._state.started_at = datetime.now(timezone.utc).isoformat()
             self._state.finished_at = None
             self._state.last_error = None
+            self._state.mode = mode
+            self._state.stats = None
 
         worker = Thread(target=self._run_worker, args=(build_fn, on_success), daemon=True)
         worker.start()
@@ -80,6 +86,12 @@ class ReindexService:
                 str(candidate.content_index_path),
                 str(candidate.title_index_path),
             )
+            build_stats: dict[str, int] | None = None
+            if isinstance(doc_count, tuple):
+                count_value, stats_value = doc_count
+                doc_count = int(count_value)
+                if isinstance(stats_value, dict):
+                    build_stats = {str(k): int(v) for k, v in stats_value.items()}
             self.runtime.promote_candidate(candidate, doc_count=doc_count)
             active = self.runtime.read_active_manifest()
             if on_success is not None:
@@ -93,8 +105,10 @@ class ReindexService:
             terminal_status = "succeeded"
             terminal_active_version = active.version
             terminal_doc_count = active.doc_count
+            terminal_stats = build_stats
         except Exception as exc:
             terminal_error = str(exc)
+            terminal_stats = None
         finally:
             finished_at = datetime.now(timezone.utc).isoformat()
             with self._lock:
@@ -104,3 +118,4 @@ class ReindexService:
                 if terminal_status == "succeeded":
                     self._state.active_version = terminal_active_version
                     self._state.last_doc_count = terminal_doc_count
+                    self._state.stats = terminal_stats

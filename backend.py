@@ -16,6 +16,8 @@ from spellcorrector import SpellingCorrector
 from preprocessor import IndonesianPreprocessor
 from index_runtime import ActiveManifest, IndexRuntime
 from reindex_service import ReindexService
+from incremental_indexer import IncrementalIndexBuilder
+from incremental_indexer import build_indices_from_records
 
 app = Flask(__name__)
 CORS(app) # Enable CORS for Next.js frontend
@@ -26,6 +28,8 @@ TITLE_INDEX_PATH = "title_index.pkl"
 DOWNLOADS_DIR = "new_dataset"  # Directory containing docx files
 FEEDBACK_LOG_PATH = "search_feedback_log.json"
 INDEX_STORE_DIR = os.getenv("INDEX_STORE_DIR", "data/index")
+DOCUMENT_CACHE_PATH = os.getenv("DOCUMENT_CACHE_PATH", os.path.join(INDEX_STORE_DIR, "document_cache.json"))
+REINDEX_MODE = os.getenv("REINDEX_MODE", "incremental").lower()
 
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///repository.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
@@ -430,6 +434,20 @@ def _build_indices(content_path: str, title_path: str) -> int:
     return indexer.content_index.num_docs
 
 
+def _build_indices_incremental(content_path: str, title_path: str) -> int:
+    builder = IncrementalIndexBuilder(DOWNLOADS_DIR, DOCUMENT_CACHE_PATH)
+    records, stats, cache = builder.collect_records()
+    build_indices_from_records(records, content_path, title_path)
+    builder.save_cache(cache)
+    return len(records), stats
+
+
+def _select_reindex_builder():
+    if REINDEX_MODE == "full":
+        return _build_indices, "full"
+    return _build_indices_incremental, "incremental"
+
+
 def require_internal_admin_token(f):
     from functools import wraps
 
@@ -547,7 +565,13 @@ def delete_thesis(id):
 @require_internal_admin_token
 def trigger_index():
     actor = request.headers.get('X-Admin-Actor', 'admin@informatika.unud.ac.id')
-    started, message = reindex_service.start(actor=actor, build_fn=_build_indices, on_success=_on_reindex_success)
+    build_fn, mode = _select_reindex_builder()
+    started, message = reindex_service.start(
+        actor=actor,
+        build_fn=build_fn,
+        on_success=_on_reindex_success,
+        mode=mode,
+    )
     if not started:
         return jsonify({'error': message}), 409
     return jsonify({'message': message}), 202
@@ -559,6 +583,8 @@ def get_reindex_status():
     state = reindex_service.status()
     return jsonify({
         'status': state.status,
+        'mode': state.mode,
+        'stats': state.stats,
         'actor': state.actor,
         'started_at': state.started_at,
         'finished_at': state.finished_at,
