@@ -14,11 +14,24 @@ interface Thesis {
   filename: string;
   upload_date: string;
   is_indexed: boolean;
+  source_type?: 'local' | 'gdrive';
+  source_url?: string | null;
 }
 
 interface ReindexStatusResponse {
   status: ReindexStatus;
   last_error?: string | null;
+  mode?: string | null;
+  stats?: {
+    created?: number;
+    updated?: number;
+    reused?: number;
+    deleted?: number;
+  } | null;
+}
+
+interface GdriveCreateResponse {
+  error?: string;
 }
 
 export default function RepositoryPage() {
@@ -26,6 +39,9 @@ export default function RepositoryPage() {
   const [loading, setLoading] = useState(true);
   const [indexing, setIndexing] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [gdriveUrl, setGdriveUrl] = useState('');
+  const [gdriveTitle, setGdriveTitle] = useState('');
+  const [addingGdrive, setAddingGdrive] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<ReindexStatusResponse>({ status: 'idle' });
 
@@ -120,6 +136,34 @@ export default function RepositoryPage() {
     await fetchReindexStatus();
   };
 
+  const handleAddGdriveSource = async () => {
+    if (!gdriveUrl.trim() || isReindexRunning || addingGdrive) return;
+
+    setAddingGdrive(true);
+    try {
+      const response = await fetch('/api/admin/source/gdrive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: gdriveUrl.trim(), title: gdriveTitle.trim() || undefined }),
+      });
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as GdriveCreateResponse | null;
+        setError(payload?.error ?? 'Failed to add Google Drive source.');
+        return;
+      }
+
+      setGdriveUrl('');
+      setGdriveTitle('');
+      setError(null);
+      await fetchTheses();
+    } catch {
+      setError('Failed to add Google Drive source.');
+    } finally {
+      setAddingGdrive(false);
+    }
+  };
+
   if (loading) return <div className="p-8 text-zinc-500">Loading repository data...</div>;
 
   return (
@@ -130,6 +174,14 @@ export default function RepositoryPage() {
           <p className="mt-1 text-sm text-zinc-500">Manage documents in the search engine index.</p>
           <div className="mt-3">
             <ReindexStatusBadge status={status.status} lastError={status.last_error} />
+            {status.mode ? (
+              <p className="mt-2 text-xs text-zinc-500 uppercase tracking-wide">Mode: {status.mode}</p>
+            ) : null}
+            {status.stats ? (
+              <p className="mt-1 text-xs text-zinc-500">
+                created {status.stats.created ?? 0}, updated {status.stats.updated ?? 0}, reused {status.stats.reused ?? 0}, deleted {status.stats.deleted ?? 0}
+              </p>
+            ) : null}
           </div>
         </div>
         <div className="flex gap-3">
@@ -154,11 +206,43 @@ export default function RepositoryPage() {
 
       {error ? <p className="mb-4 text-sm text-zinc-700">{error}</p> : null}
 
+      <div className="mb-5 rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-700">Add from Google Drive</h2>
+        <p className="mt-1 text-xs text-zinc-500">Use public-share link for MVP. File is indexed locally, users open source on Drive.</p>
+        <div className="mt-3 grid gap-3 md:grid-cols-[1fr_240px_auto]">
+          <input
+            type="url"
+            placeholder="https://drive.google.com/file/d/.../view"
+            value={gdriveUrl}
+            onChange={(event) => setGdriveUrl(event.target.value)}
+            disabled={isReindexRunning || addingGdrive}
+            className="rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-700"
+          />
+          <input
+            type="text"
+            placeholder="Optional title"
+            value={gdriveTitle}
+            onChange={(event) => setGdriveTitle(event.target.value)}
+            disabled={isReindexRunning || addingGdrive}
+            className="rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-700"
+          />
+          <button
+            type="button"
+            onClick={handleAddGdriveSource}
+            disabled={!gdriveUrl.trim() || isReindexRunning || addingGdrive}
+            className="cursor-pointer rounded-md bg-zinc-950 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {addingGdrive ? 'Adding...' : 'Add Link'}
+          </button>
+        </div>
+      </div>
+
       <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm">
         <table className="w-full text-left text-sm">
           <thead className="border-b border-zinc-200 bg-zinc-50 font-medium text-zinc-500">
             <tr>
               <th className="px-6 py-3">Document</th>
+              <th className="px-6 py-3">Source</th>
               <th className="px-6 py-3">Upload Date</th>
               <th className="px-6 py-3">Status</th>
               <th className="px-6 py-3 text-right">Actions</th>
@@ -176,7 +260,23 @@ export default function RepositoryPage() {
                     </div>
                   </div>
                 </td>
-                <td className="px-6 py-4 text-zinc-500">{new Date(thesis.upload_date).toLocaleDateString()}</td>
+                <td className="px-6 py-4 text-xs text-zinc-500">
+                  {thesis.source_type === 'gdrive' ? (
+                    <a
+                      href={thesis.source_url ?? '#'}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="cursor-pointer text-blue-600 hover:text-blue-700"
+                    >
+                      Google Drive
+                    </a>
+                  ) : (
+                    'Local Upload'
+                  )}
+                </td>
+                <td className="px-6 py-4 text-zinc-500">
+                  {thesis.upload_date ? new Date(thesis.upload_date).toLocaleDateString() : '-'}
+                </td>
                 <td className="px-6 py-4">
                   <span
                     className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${thesis.is_indexed ? 'border-zinc-300 bg-zinc-100 text-zinc-800' : 'border-zinc-200 bg-zinc-50 text-zinc-600'}`}
@@ -197,7 +297,7 @@ export default function RepositoryPage() {
             ))}
             {theses.length === 0 && (
               <tr>
-                <td colSpan={4} className="px-6 py-8 text-center text-zinc-500">
+                <td colSpan={5} className="px-6 py-8 text-center text-zinc-500">
                   No documents found.
                 </td>
               </tr>

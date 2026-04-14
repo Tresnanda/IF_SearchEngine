@@ -94,7 +94,7 @@ export default function SearchResults({ results }: SearchResultsProps) {
                             {/* Actions (Hidden until hover on desktop, always visible on mobile) */}
                             <div className="flex flex-col gap-2 shrink-0 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                                 <a
-                                    href={`/files/${result.filename}`}
+                                    href={resolveDocumentHref(result)}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="flex items-center justify-center w-8 h-8 rounded text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 transition-colors"
@@ -103,7 +103,7 @@ export default function SearchResults({ results }: SearchResultsProps) {
                                     <ExternalLink className="w-4 h-4" />
                                 </a>
                                 <a
-                                    href={`/files/${result.filename}`}
+                                    href={resolveDocumentHref(result)}
                                     download
                                     className="flex items-center justify-center w-8 h-8 rounded text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 transition-colors"
                                     title="Download Document"
@@ -123,3 +123,9 @@ export default function SearchResults({ results }: SearchResultsProps) {
         </div>
     );
 }
+    const resolveDocumentHref = (result: SearchResult) => {
+        if (result.source_type === 'gdrive' && result.source_url) {
+            return result.source_url;
+        }
+        return `/files/${result.filename}`;
+    };

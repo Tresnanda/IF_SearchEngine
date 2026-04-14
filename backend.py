@@ -5,6 +5,7 @@ import os
 import pickle
 import json
 from pathlib import Path
+import re
 import docx
 import PyPDF2
 from datetime import datetime
@@ -31,6 +32,26 @@ INDEX_STORE_DIR = os.getenv("INDEX_STORE_DIR", "data/index")
 DOCUMENT_CACHE_PATH = os.getenv("DOCUMENT_CACHE_PATH", os.path.join(INDEX_STORE_DIR, "document_cache.json"))
 REINDEX_MODE = os.getenv("REINDEX_MODE", "incremental").lower()
 
+
+def _extract_gdrive_file_id(url: str) -> str | None:
+    patterns = [
+        r"/file/d/([a-zA-Z0-9_-]+)",
+        r"[?&]id=([a-zA-Z0-9_-]+)",
+        r"/uc\?export=download&id=([a-zA-Z0-9_-]+)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _normalize_gdrive_url(url: str) -> str:
+    file_id = _extract_gdrive_file_id(url)
+    if not file_id:
+        return url
+    return f"https://drive.google.com/file/d/{file_id}/view"
+
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///repository.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
@@ -50,6 +71,9 @@ class Thesis(db.Model):
     uploader_email = db.Column(db.String(120), nullable=False, default="admin@informatika.unud.ac.id")
     upload_date = db.Column(db.DateTime, default=datetime.utcnow)
     is_indexed = db.Column(db.Boolean, default=False)
+    source_type = db.Column(db.String(20), nullable=False, default="local")
+    source_url = db.Column(db.Text, nullable=True)
+    source_file_id = db.Column(db.String(255), nullable=True)
 
     def to_dict(self):
         return {
@@ -58,7 +82,9 @@ class Thesis(db.Model):
             'filename': self.filename,
             'uploader_email': self.uploader_email,
             'upload_date': self.upload_date.isoformat() + "Z" if self.upload_date else None,
-            'is_indexed': self.is_indexed
+            'is_indexed': self.is_indexed,
+            'source_type': self.source_type,
+            'source_url': self.source_url,
         }
 
 def sync_existing_files_to_db():
@@ -85,7 +111,8 @@ def sync_existing_files_to_db():
                 new_thesis = Thesis(
                     title=extract_title(filename),
                     filename=filename,
-                    is_indexed=is_indexed
+                    is_indexed=is_indexed,
+                    source_type="local",
                 )
                 db.session.add(new_thesis)
                 added_count += 1
@@ -96,6 +123,18 @@ def sync_existing_files_to_db():
 
 with app.app_context():
     db.create_all()
+    # Lightweight migration for legacy DB rows.
+    try:
+        columns = [col[1] for col in db.session.execute(db.text("PRAGMA table_info(thesis)")).fetchall()]
+        if "source_type" not in columns:
+            db.session.execute(db.text("ALTER TABLE thesis ADD COLUMN source_type VARCHAR(20) DEFAULT 'local'"))
+        if "source_url" not in columns:
+            db.session.execute(db.text("ALTER TABLE thesis ADD COLUMN source_url TEXT"))
+        if "source_file_id" not in columns:
+            db.session.execute(db.text("ALTER TABLE thesis ADD COLUMN source_file_id VARCHAR(255)"))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
     sync_existing_files_to_db()
 
 # Global engine variable
@@ -388,6 +427,8 @@ def search():
                 combined_scores.append({
                     "title": title,
                     "filename": filename,
+                    "source_type": metadata.get("source_type", "local"),
+                    "source_url": metadata.get("source_url"),
                     "score": final_score,
                     "content_score": content_score,
                     "title_score": title_score,
@@ -435,7 +476,29 @@ def _build_indices(content_path: str, title_path: str) -> int:
 
 
 def _build_indices_incremental(content_path: str, title_path: str) -> int:
-    builder = IncrementalIndexBuilder(DOWNLOADS_DIR, DOCUMENT_CACHE_PATH)
+    sources = []
+    with app.app_context():
+        theses = Thesis.query.all()
+    for thesis in theses:
+        if thesis.source_type == 'gdrive':
+            sources.append({
+                'filename': thesis.filename,
+                'title': thesis.title,
+                'source_type': 'gdrive',
+                'source_url': thesis.source_url,
+            })
+        else:
+            file_path = os.path.join(DOWNLOADS_DIR, thesis.filename)
+            if os.path.exists(file_path):
+                sources.append({
+                    'filename': thesis.filename,
+                    'title': thesis.title,
+                    'path': file_path,
+                    'source_type': 'local',
+                    'source_url': None,
+                })
+
+    builder = IncrementalIndexBuilder(DOWNLOADS_DIR, DOCUMENT_CACHE_PATH, sources=sources)
     records, stats, cache = builder.collect_records()
     build_indices_from_records(records, content_path, title_path)
     builder.save_cache(cache)
@@ -546,15 +609,51 @@ def upload_thesis():
 
     return jsonify({'message': 'File uploaded successfully', 'thesis': new_thesis.to_dict()}), 201
 
+
+@app.route('/admin/source/gdrive', methods=['POST'])
+@require_internal_admin_token
+def add_gdrive_source():
+    payload = request.get_json(silent=True) or {}
+    source_url = (payload.get('url') or '').strip()
+    title = (payload.get('title') or '').strip()
+
+    if not source_url:
+        return jsonify({'error': 'GDrive URL is required'}), 400
+
+    file_id = _extract_gdrive_file_id(source_url)
+    if not file_id:
+        return jsonify({'error': 'Invalid public Google Drive URL'}), 400
+
+    normalized_url = _normalize_gdrive_url(source_url)
+    synthetic_filename = f"gdrive_{file_id}.pdf"
+    final_title = title or synthetic_filename.replace('.pdf', '')
+
+    existing = Thesis.query.filter_by(filename=synthetic_filename).first()
+    if existing:
+        return jsonify({'error': 'Source already exists'}), 409
+
+    thesis = Thesis(
+        title=final_title,
+        filename=synthetic_filename,
+        is_indexed=False,
+        source_type='gdrive',
+        source_url=normalized_url,
+        source_file_id=file_id,
+    )
+    db.session.add(thesis)
+    db.session.commit()
+
+    return jsonify({'message': 'GDrive source added', 'thesis': thesis.to_dict()}), 201
+
 @app.route('/admin/delete/<int:id>', methods=['DELETE'])
 @require_internal_admin_token
 def delete_thesis(id):
     thesis = Thesis.query.get_or_404(id)
-    file_path = os.path.join(DOWNLOADS_DIR, thesis.filename)
-    
-    if os.path.exists(file_path):
-        os.remove(file_path)
-        
+    if thesis.source_type == 'local':
+        file_path = os.path.join(DOWNLOADS_DIR, thesis.filename)
+        if os.path.exists(file_path):
+            os.remove(file_path)
+         
     db.session.delete(thesis)
     db.session.commit()
     

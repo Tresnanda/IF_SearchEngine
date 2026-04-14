@@ -6,6 +6,9 @@ import hashlib
 import json
 from pathlib import Path
 from typing import Dict, List, Tuple
+from tempfile import NamedTemporaryFile
+
+import requests
 
 from preprocessor import IndonesianPreprocessor
 from indexer import DocumentCorpusIndexer
@@ -25,14 +28,17 @@ class CacheEntry:
     content_tokens: List[str]
     title_tokens: List[str]
     updated_at: str
+    source_type: str = "local"
+    source_url: str | None = None
 
 
 class IncrementalIndexBuilder:
-    def __init__(self, dataset_dir: str, cache_path: str):
+    def __init__(self, dataset_dir: str, cache_path: str, sources: List[dict] | None = None):
         self.dataset_dir = Path(dataset_dir)
         self.cache_path = Path(cache_path)
         self.preprocessor = IndonesianPreprocessor()
         self.indexer = DocumentCorpusIndexer(str(self.dataset_dir))
+        self.sources = sources or []
 
     def load_cache(self) -> Dict[str, CacheEntry]:
         if not self.cache_path.exists():
@@ -51,28 +57,34 @@ class IncrementalIndexBuilder:
         stats = {"created": 0, "updated": 0, "reused": 0, "deleted": 0}
         records: List[dict] = []
 
-        files = [
-            p
-            for p in sorted(self.dataset_dir.iterdir())
-            if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS
-        ]
+        source_items = self._collect_sources()
 
-        for file_path in files:
-            filename = file_path.name
-            file_hash = self._hash_file(file_path)
-            stat = file_path.stat()
-            title = self.indexer.extract_title(filename)
+        for source in source_items:
+            filename = source["filename"]
+            source_type = source["source_type"]
+            source_url = source.get("source_url")
+            title = source.get("title") or self.indexer.extract_title(filename)
             cache_entry = existing_cache.get(filename)
+
+            if source_type == "local":
+                file_path = Path(source["path"])
+                file_hash = self._hash_file(file_path)
+                stat = file_path.stat()
+            else:
+                file_hash = hashlib.sha256((source_url or "").encode("utf-8")).hexdigest()
+                stat = type("Stat", (), {"st_size": len(source_url or ""), "st_mtime": 0.0})()
 
             if (
                 cache_entry
                 and cache_entry.file_hash == file_hash
                 and cache_entry.size == stat.st_size
+                and cache_entry.source_type == source_type
+                and cache_entry.source_url == source_url
             ):
                 entry = cache_entry
                 stats["reused"] += 1
             else:
-                content_tokens, title_tokens = self._extract_tokens_for_document(file_path, filename)
+                content_tokens, title_tokens = self._extract_tokens_for_source(source)
                 now = datetime.now(timezone.utc).isoformat()
                 entry = CacheEntry(
                     file_hash=file_hash,
@@ -82,6 +94,8 @@ class IncrementalIndexBuilder:
                     content_tokens=content_tokens,
                     title_tokens=title_tokens,
                     updated_at=now,
+                    source_type=source_type,
+                    source_url=source_url,
                 )
                 if cache_entry is None:
                     stats["created"] += 1
@@ -92,10 +106,12 @@ class IncrementalIndexBuilder:
             records.append(
                 {
                     "filename": filename,
-                    "path": str(file_path),
+                    "path": source.get("path", ""),
                     "title": entry.title,
                     "content_tokens": entry.content_tokens,
                     "title_tokens": entry.title_tokens,
+                    "source_type": source_type,
+                    "source_url": source_url,
                 }
             )
 
@@ -117,6 +133,36 @@ class IncrementalIndexBuilder:
         content_tokens = self.preprocessor.preprocess(content_text)
         title_tokens = self.preprocessor.preprocess(self.indexer.extract_title(filename))
         return content_tokens, title_tokens
+
+    def _extract_tokens_for_source(self, source: dict) -> Tuple[List[str], List[str]]:
+        source_type = source["source_type"]
+        filename = source["filename"]
+        if source_type == "local":
+            return self._extract_tokens_for_document(Path(source["path"]), filename)
+
+        source_url = source.get("source_url") or ""
+        with NamedTemporaryFile(delete=True, suffix=Path(filename).suffix.lower() or ".pdf") as handle:
+            response = requests.get(source_url, timeout=30)
+            response.raise_for_status()
+            handle.write(response.content)
+            handle.flush()
+            return self._extract_tokens_for_document(Path(handle.name), filename)
+
+    def _collect_sources(self) -> List[dict]:
+        if self.sources:
+            return sorted(self.sources, key=lambda item: item["filename"])
+
+        return [
+            {
+                "filename": p.name,
+                "path": str(p),
+                "title": self.indexer.extract_title(p.name),
+                "source_type": "local",
+                "source_url": None,
+            }
+            for p in sorted(self.dataset_dir.iterdir())
+            if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS
+        ]
 
     def _hash_file(self, file_path: Path) -> str:
         digest = hashlib.sha256()
@@ -143,6 +189,8 @@ def build_indices_from_records(records: List[dict], content_index_path: str, tit
             "filename": filename,
             "title": title,
             "path": file_path,
+            "source_type": record.get("source_type", "local"),
+            "source_url": record.get("source_url"),
         }
         content_index.doc_metadata[doc_id] = metadata
         title_index.doc_metadata[doc_id] = metadata

@@ -1,6 +1,8 @@
 export interface SearchResult {
     title: string;
     filename: string;
+    source_type?: string;
+    source_url?: string | null;
     score: number;
     content_score: number;
     title_score: number;

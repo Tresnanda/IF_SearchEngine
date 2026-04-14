@@ -183,6 +183,29 @@ def test_reindex_status_includes_mode_and_stats(client, admin_headers, monkeypat
     assert payload["stats"]["created"] == 2
 
 
+def test_add_gdrive_source_success(client, admin_headers):
+    response = client.post(
+        "/admin/source/gdrive",
+        headers=admin_headers,
+        json={
+            "url": "https://drive.google.com/file/d/1AbCdEfGhIjKlMn/view?usp=sharing",
+            "title": "Sample Thesis from Drive",
+        },
+    )
+
+    assert response.status_code in (201, 409)
+
+
+def test_add_gdrive_source_rejects_invalid_url(client, admin_headers):
+    response = client.post(
+        "/admin/source/gdrive",
+        headers=admin_headers,
+        json={"url": "https://example.com/not-drive"},
+    )
+
+    assert response.status_code == 400
+
+
 def test_startup_fallback_sets_active_manifest_to_legacy_root(monkeypatch, tmp_path: Path):
     import backend
     from index_runtime import IndexRuntime

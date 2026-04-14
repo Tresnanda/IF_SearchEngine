@@ -81,3 +81,26 @@ def test_collect_records_tracks_updates_and_deletes(tmp_path: Path):
     assert stats["deleted"] == 1
     assert calls == ["a.pdf"]
     assert "b.pdf" not in cache2
+
+
+def test_collect_records_supports_gdrive_sources(tmp_path: Path):
+    cache_path = tmp_path / "document_cache.json"
+    sources = [
+        {
+            "filename": "gdrive_abc.pdf",
+            "title": "GDrive Thesis",
+            "source_type": "gdrive",
+            "source_url": "https://drive.google.com/file/d/abc/view",
+        }
+    ]
+
+    builder = IncrementalIndexBuilder(str(tmp_path), str(cache_path), sources=sources)
+    builder._extract_tokens_for_source = lambda source: (["token"], ["title"])  # type: ignore[attr-defined]
+
+    records, stats, cache = builder.collect_records()
+
+    assert len(records) == 1
+    assert records[0]["source_type"] == "gdrive"
+    assert records[0]["source_url"] == "https://drive.google.com/file/d/abc/view"
+    assert stats["created"] == 1
+    assert cache["gdrive_abc.pdf"].source_type == "gdrive"

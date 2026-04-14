@@ -3,3 +3,4 @@ Sastrawi==1.0.1
 flask==3.0.0
 Flask-SQLAlchemy==3.1.1
 pytest==8.3.5
+requests==2.32.3
