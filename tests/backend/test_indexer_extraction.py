@@ -32,3 +32,44 @@ def test_extract_text_from_docx_uses_zip_fallback_for_broken_docx(tmp_path: Path
     extracted = indexer.extract_text_from_docx(str(broken_docx))
 
     assert "Abstrak penelitian sistem informasi" in extracted
+
+
+def test_derive_title_from_text_prefers_front_matter_title():
+    indexer = DocumentCorpusIndexer("new_dataset")
+    text = """
+    SISTEM INFORMASI PERENCANAAN PEMBANGUNAN DAERAH
+    STUDI KASUS BAPPEDA KABUPATEN KLUNGKUNG
+    Oleh
+    I Made Contoh
+    """
+
+    title = indexer._derive_title_from_text(text, "fallback-title")
+
+    assert "SISTEM INFORMASI PERENCANAAN PEMBANGUNAN DAERAH" in title
+    assert "STUDI KASUS BAPPEDA KABUPATEN KLUNGKUNG" in title
+
+
+def test_derive_title_from_text_falls_back_when_no_good_candidate():
+    indexer = DocumentCorpusIndexer("new_dataset")
+    text = "Oleh\nNIM 12345678\nFakultas Teknik"
+
+    title = indexer._derive_title_from_text(text, "fallback-title")
+
+    assert title == "fallback-title"
+
+
+def test_derive_year_from_text_selects_recent_plausible_year():
+    indexer = DocumentCorpusIndexer("new_dataset")
+    text = "Hak cipta 1998\nSkripsi ini diajukan tahun 2023\nRevisi 2024"
+
+    year = indexer._derive_year_from_text(text)
+
+    assert year == "2024"
+
+
+def test_derive_year_from_text_returns_none_when_missing():
+    indexer = DocumentCorpusIndexer("new_dataset")
+
+    year = indexer._derive_year_from_text("Dokumen tanpa angka tahun")
+
+    assert year is None

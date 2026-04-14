@@ -22,6 +22,11 @@ interface ReindexStatusResponse {
   status: ReindexStatus;
   last_error?: string | null;
   mode?: string | null;
+  actor?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  active_version?: string | null;
+  last_doc_count?: number | null;
   stats?: {
     created?: number;
     updated?: number;
@@ -46,6 +51,31 @@ export default function RepositoryPage() {
   const [status, setStatus] = useState<ReindexStatusResponse>({ status: 'idle' });
 
   const isReindexRunning = status.status === 'running';
+
+  const totals = {
+    all: theses.length,
+    indexed: theses.filter((thesis) => thesis.is_indexed).length,
+    local: theses.filter((thesis) => thesis.source_type !== 'gdrive').length,
+    gdrive: theses.filter((thesis) => thesis.source_type === 'gdrive').length,
+  };
+  const indexedPercent = totals.all > 0 ? Math.round((totals.indexed / totals.all) * 100) : 0;
+
+  const domainMap = theses.reduce<Record<string, number>>((acc, thesis) => {
+    const label = detectDomain(thesis.title);
+    acc[label] = (acc[label] ?? 0) + 1;
+    return acc;
+  }, {});
+  const domainBuckets = Object.entries(domainMap).sort((a, b) => b[1] - a[1]);
+
+  const yearMap = theses.reduce<Record<string, number>>((acc, thesis) => {
+    const year = parseYearFromTitle(thesis.title);
+    if (!year) return acc;
+    acc[year] = (acc[year] ?? 0) + 1;
+    return acc;
+  }, {});
+  const yearBuckets = Object.entries(yearMap).sort((a, b) => Number(b[0]) - Number(a[0]));
+
+  const reindexDurationLabel = formatReindexDuration(status.started_at, status.finished_at, status.status);
 
   const fetchTheses = useCallback(async () => {
     try {
@@ -204,6 +234,58 @@ export default function RepositoryPage() {
         </div>
       </div>
 
+      <div className="mb-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <KpiCard label="Total Documents" value={`${totals.all}`} hint={`${totals.local} local • ${totals.gdrive} gdrive`} />
+        <KpiCard label="Indexed Coverage" value={`${indexedPercent}%`} hint={`${totals.indexed}/${totals.all || 0} indexed`} />
+        <KpiCard label="Active Index Version" value={status.active_version ?? 'n/a'} hint={`docs ${status.last_doc_count ?? 0}`} />
+        <KpiCard label="Last Reindex Duration" value={reindexDurationLabel} hint={status.mode ? `mode ${status.mode}` : 'mode n/a'} />
+      </div>
+
+      <div className="mb-6 grid gap-4 lg:grid-cols-3">
+        <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm lg:col-span-2">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-700">Reindex Timeline</h2>
+          <div className="mt-3 grid gap-3 text-sm text-zinc-600 sm:grid-cols-2">
+            <TimelineItem label="Status" value={status.status} />
+            <TimelineItem label="Actor" value={status.actor ?? '-'} />
+            <TimelineItem label="Started" value={formatTimestamp(status.started_at)} />
+            <TimelineItem label="Finished" value={formatTimestamp(status.finished_at)} />
+          </div>
+          {status.stats ? (
+            <p className="mt-3 text-xs text-zinc-500">
+              created {status.stats.created ?? 0}, updated {status.stats.updated ?? 0}, reused {status.stats.reused ?? 0}, deleted {status.stats.deleted ?? 0}
+            </p>
+          ) : null}
+          {status.last_error ? <p className="mt-2 text-xs text-zinc-700">Error: {status.last_error}</p> : null}
+        </div>
+
+        <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-700">Domain Distribution</h2>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {domainBuckets.length > 0 ? (
+              domainBuckets.map(([domain, count]) => (
+                <span key={domain} className="inline-flex items-center rounded-full border border-zinc-200 bg-zinc-50 px-2.5 py-1 text-xs text-zinc-700">
+                  {domain} {count}
+                </span>
+              ))
+            ) : (
+              <span className="text-xs text-zinc-500">No domain data</span>
+            )}
+          </div>
+          <h3 className="mt-5 text-sm font-semibold uppercase tracking-wide text-zinc-700">Year Distribution</h3>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {yearBuckets.length > 0 ? (
+              yearBuckets.map(([year, count]) => (
+                <span key={year} className="inline-flex items-center rounded-full border border-zinc-200 bg-zinc-50 px-2.5 py-1 text-xs text-zinc-700">
+                  {year} {count}
+                </span>
+              ))
+            ) : (
+              <span className="text-xs text-zinc-500">No year data</span>
+            )}
+          </div>
+        </div>
+      </div>
+
       {error ? <p className="mb-4 text-sm text-zinc-700">{error}</p> : null}
 
       <div className="mb-5 rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
@@ -314,4 +396,67 @@ export default function RepositoryPage() {
       />
     </div>
   );
+}
+
+function KpiCard({ label, value, hint }: { label: string; value: string; hint: string }) {
+  return (
+    <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
+      <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">{label}</p>
+      <p className="mt-2 text-lg font-semibold text-zinc-900">{value}</p>
+      <p className="mt-1 text-xs text-zinc-500">{hint}</p>
+    </div>
+  );
+}
+
+function TimelineItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2">
+      <p className="text-xs uppercase tracking-wide text-zinc-500">{label}</p>
+      <p className="mt-1 text-sm text-zinc-800">{value}</p>
+    </div>
+  );
+}
+
+function formatTimestamp(value?: string | null): string {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '-';
+  return `${date.toLocaleDateString()} ${date.toLocaleTimeString()}`;
+}
+
+function formatReindexDuration(startedAt?: string | null, finishedAt?: string | null, status?: ReindexStatus): string {
+  if (!startedAt) return 'n/a';
+
+  const start = new Date(startedAt).getTime();
+  const end = finishedAt ? new Date(finishedAt).getTime() : Date.now();
+  if (Number.isNaN(start) || Number.isNaN(end) || end < start) return 'n/a';
+
+  const totalSeconds = Math.round((end - start) / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  const base = `${minutes}m ${seconds}s`;
+  return status === 'running' ? `${base} (running)` : base;
+}
+
+function parseYearFromTitle(title: string): string | null {
+  const match = title.match(/\b(19|20)\d{2}\b/);
+  return match ? match[0] : null;
+}
+
+function detectDomain(title: string): string {
+  const lowered = title.toLowerCase();
+  const domainRules: Array<{ label: string; keywords: string[] }> = [
+    { label: 'sentiment', keywords: ['sentimen', 'sentiment', 'review', 'opini'] },
+    { label: 'security', keywords: ['enkripsi', 'kriptografi', 'rsa', 'aes', 'cipher', 'keamanan'] },
+    { label: 'computer vision', keywords: ['cnn', 'resnet', 'inception', 'gambar', 'vision'] },
+    { label: 'nlp', keywords: ['text mining', 'ontology', 'token', 'bahasa'] },
+    { label: 'recommender', keywords: ['rekomendasi', 'collaborative', 'slope one'] },
+  ];
+
+  for (const rule of domainRules) {
+    if (rule.keywords.some((keyword) => lowered.includes(keyword))) {
+      return rule.label;
+    }
+  }
+  return 'other';
 }

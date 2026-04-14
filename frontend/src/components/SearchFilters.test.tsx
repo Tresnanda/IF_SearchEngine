@@ -25,4 +25,24 @@ describe("SearchFilters", () => {
     expect(onYearChange).toHaveBeenCalledWith("2024");
     expect(onDomainChange).toHaveBeenCalledWith("security");
   });
+
+  it("disables year filter when year metadata is unavailable", () => {
+    const onYearChange = vi.fn();
+    const onDomainChange = vi.fn();
+
+    render(
+      <SearchFilters
+        years={[]}
+        domains={["security"]}
+        selectedYear="all"
+        selectedDomain="all"
+        onYearChange={onYearChange}
+        onDomainChange={onDomainChange}
+      />,
+    );
+
+    const yearSelects = screen.getAllByLabelText("Year");
+    expect(yearSelects[yearSelects.length - 1]).toBeDisabled();
+    expect(screen.getByText("Year not available")).toBeInTheDocument();
+  });
 });

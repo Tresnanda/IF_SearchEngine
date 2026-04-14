@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import PyPDF2
 import docx
 import re
@@ -8,6 +10,7 @@ from collections import defaultdict, Counter
 import pickle
 import zipfile
 import xml.etree.ElementTree as ET
+from datetime import datetime
 
 class DocumentCorpusIndexer:
     """Index PDF and DOCX corpus and build inverted index"""
@@ -65,6 +68,82 @@ class DocumentCorpusIndexer:
         # Extract abstract using multiple patterns
         abstract = self._extract_abstract_section(full_text)
         return abstract
+
+    def extract_first_page_text_from_pdf(self, pdf_path: str) -> str:
+        try:
+            with open(pdf_path, 'rb') as file:
+                pdf_reader = PyPDF2.PdfReader(file)
+                if not pdf_reader.pages:
+                    return ""
+                return pdf_reader.pages[0].extract_text() or ""
+        except Exception:
+            return ""
+
+    def _derive_title_from_text(self, text: str, fallback_title: str) -> str:
+        if not text:
+            return fallback_title
+
+        lines = []
+        for raw in text.splitlines():
+            cleaned = re.sub(r'\s+', ' ', raw).strip(" -:\t")
+            if cleaned:
+                lines.append(cleaned)
+
+        if not lines:
+            return fallback_title
+
+        stop_markers = [
+            'abstrak',
+            'abstract',
+            'oleh',
+            'nim',
+            'program studi',
+            'fakultas',
+            'universitas',
+            'diajukan',
+            'skripsi',
+            'tesis',
+            'disusun oleh',
+        ]
+
+        selected = []
+        started = False
+        for line in lines[:25]:
+            lowered = line.lower()
+            if any(marker in lowered for marker in stop_markers):
+                if started:
+                    break
+                continue
+            if len(line) < 10:
+                continue
+            if re.search(r'\b\d{7,}\b', line):
+                if started:
+                    break
+                continue
+            if len(line.split()) < 3:
+                continue
+
+            selected.append(line)
+            started = True
+
+            if len(" ".join(selected)) >= 180:
+                break
+
+        candidate = re.sub(r'\s+', ' ', " ".join(selected)).strip(" -:")
+        if len(candidate) < 20:
+            return fallback_title
+        return candidate
+
+    def _derive_year_from_text(self, text: str) -> str | None:
+        if not text:
+            return None
+
+        current_year = datetime.now().year
+        matches = [int(value) for value in re.findall(r"\b(19\d{2}|20\d{2})\b", text)]
+        candidates = [value for value in matches if 1990 <= value <= current_year + 1]
+        if not candidates:
+            return None
+        return str(max(candidates))
 
     def _extract_abstract_section(self, text: str) -> str:
         """Extract abstract section from full text using various patterns"""
@@ -296,9 +375,17 @@ class DocumentCorpusIndexer:
             if filename.lower().endswith('.pdf'):
                 abstract = self.extract_abstract_from_pdf(file_path)
                 combined_text = self.extract_core_sections(file_path)
+                first_page_text = self.extract_first_page_text_from_pdf(file_path)
+                title = self._derive_title_from_text(
+                    first_page_text,
+                    self.extract_title(filename),
+                )
+                year = self._derive_year_from_text(first_page_text)
             elif filename.lower().endswith('.docx'):
                 full_text = self.extract_text_from_docx(file_path)
                 abstract = self._extract_abstract_section(full_text)
+                title = self._derive_title_from_text(full_text, self.extract_title(filename))
+                year = self._derive_year_from_text(full_text)
                 # For docx, we'll just index the full text for now or abstract if found.
                 # Actually, let's just use full text for methodology/conclusion since regex might miss docx headers
                 # We'll just rely on the whole text, or try to be smart
@@ -317,8 +404,9 @@ class DocumentCorpusIndexer:
                 print(f"  No text extracted from DOCX, skipping...")
                 continue
 
-            # Extract title from filename
-            title = self.extract_title(filename)
+            if filename.lower().endswith('.doc'):
+                title = self.extract_title(filename)
+                year = None
 
             # Preprocess abstract as content
             content_tokens = self.preprocessor.preprocess(combined_text)
@@ -333,12 +421,14 @@ class DocumentCorpusIndexer:
             self.content_index.doc_metadata[self.doc_id_counter] = {
                 'filename': filename,
                 'title': title,
-                'path': file_path
+                'path': file_path,
+                'year': year,
             }
             self.title_index.doc_metadata[self.doc_id_counter] = {
                 'filename': filename,
                 'title': title,
-                'path': file_path
+                'path': file_path,
+                'year': year,
             }
 
             # Process content tokens

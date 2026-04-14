@@ -12,6 +12,10 @@ RUN npm install
 # Copy source code
 COPY . .
 
+# Ensure rewrites are compiled with the container backend host
+ARG BACKEND_URL=http://backend:5000
+ENV BACKEND_URL=${BACKEND_URL}
+
 # Build the application
 # We need to ensure environment variables are available at build time if they are embedded,
 # but for rewrites they are read at runtime in next.config.mjs if we don't hardcode them.

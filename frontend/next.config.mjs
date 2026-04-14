@@ -5,8 +5,12 @@ const nextConfig = {
         console.log('Using Backend URL:', backendUrl);
         return [
             {
-                source: '/api/:path*',
-                destination: `${backendUrl}/:path*`, // Proxy to Backend
+                source: '/api/search',
+                destination: `${backendUrl}/search`,
+            },
+            {
+                source: '/api/feedback',
+                destination: `${backendUrl}/feedback`,
             },
             {
                 source: '/files/:path*',

@@ -17,6 +17,7 @@ from collections import Counter, defaultdict
 
 
 SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".doc"}
+CACHE_EXTRACTOR_VERSION = 2
 
 
 @dataclass
@@ -30,6 +31,8 @@ class CacheEntry:
     updated_at: str
     source_type: str = "local"
     source_url: str | None = None
+    extractor_version: int = 1
+    year: str | None = None
 
 
 class IncrementalIndexBuilder:
@@ -63,7 +66,7 @@ class IncrementalIndexBuilder:
             filename = source["filename"]
             source_type = source["source_type"]
             source_url = source.get("source_url")
-            title = source.get("title") or self.indexer.extract_title(filename)
+            source_title = source.get("title") or self.indexer.extract_title(filename)
             cache_entry = existing_cache.get(filename)
 
             if source_type == "local":
@@ -80,22 +83,28 @@ class IncrementalIndexBuilder:
                 and cache_entry.size == stat.st_size
                 and cache_entry.source_type == source_type
                 and cache_entry.source_url == source_url
+                and cache_entry.extractor_version == CACHE_EXTRACTOR_VERSION
             ):
                 entry = cache_entry
                 stats["reused"] += 1
             else:
-                content_tokens, title_tokens = self._extract_tokens_for_source(source)
+                resolved_title, resolved_year, content_tokens, title_tokens = self._extract_record_payload(
+                    source,
+                    source_title,
+                )
                 now = datetime.now(timezone.utc).isoformat()
                 entry = CacheEntry(
                     file_hash=file_hash,
                     mtime=stat.st_mtime,
                     size=stat.st_size,
-                    title=title,
+                    title=resolved_title,
                     content_tokens=content_tokens,
                     title_tokens=title_tokens,
                     updated_at=now,
                     source_type=source_type,
                     source_url=source_url,
+                    extractor_version=CACHE_EXTRACTOR_VERSION,
+                    year=resolved_year,
                 )
                 if cache_entry is None:
                     stats["created"] += 1
@@ -108,6 +117,7 @@ class IncrementalIndexBuilder:
                     "filename": filename,
                     "path": source.get("path", ""),
                     "title": entry.title,
+                    "year": entry.year,
                     "content_tokens": entry.content_tokens,
                     "title_tokens": entry.title_tokens,
                     "source_type": source_type,
@@ -121,18 +131,46 @@ class IncrementalIndexBuilder:
 
         return records, stats, updated_cache
 
-    def _extract_tokens_for_document(self, file_path: Path, filename: str) -> Tuple[List[str], List[str]]:
+    def _extract_record_payload(self, source: dict, source_title: str) -> Tuple[str, str | None, List[str], List[str]]:
+        extracted = self._extract_tokens_for_source(source)
+        if len(extracted) == 4:
+            resolved_title, resolved_year, content_tokens, title_tokens = extracted
+            if not resolved_title:
+                resolved_title = source_title
+            return resolved_title, resolved_year, content_tokens, title_tokens
+
+        if len(extracted) == 3:
+            resolved_title, content_tokens, title_tokens = extracted
+            if not resolved_title:
+                resolved_title = source_title
+            return resolved_title, None, content_tokens, title_tokens
+
+        content_tokens, title_tokens = extracted
+        return source_title, None, content_tokens, title_tokens
+
+    def _extract_tokens_for_document(self, file_path: Path, filename: str) -> Tuple[str, str | None, List[str], List[str]]:
         lower_suffix = file_path.suffix.lower()
         if lower_suffix == ".pdf":
+            first_page_text = self.indexer.extract_first_page_text_from_pdf(str(file_path))
+            title = self.indexer._derive_title_from_text(first_page_text, self.indexer.extract_title(filename))
+            year = self.indexer._derive_year_from_text(first_page_text)
             content_text = self.indexer.extract_core_sections(str(file_path))
+        elif lower_suffix == ".docx":
+            full_text = self.indexer.extract_text_from_docx(str(file_path))
+            title = self.indexer._derive_title_from_text(full_text, self.indexer.extract_title(filename))
+            year = self.indexer._derive_year_from_text(full_text)
+            abstract = self.indexer._extract_abstract_section(full_text)
+            content_text = abstract if abstract else full_text[:5000]
         else:
+            title = self.indexer.extract_title(filename)
+            year = None
             full_text = self.indexer.extract_text_from_docx(str(file_path))
             abstract = self.indexer._extract_abstract_section(full_text)
             content_text = abstract if abstract else full_text[:5000]
 
         content_tokens = self.preprocessor.preprocess(content_text)
-        title_tokens = self.preprocessor.preprocess(self.indexer.extract_title(filename))
-        return content_tokens, title_tokens
+        title_tokens = self.preprocessor.preprocess(title)
+        return title, year, content_tokens, title_tokens
 
     def _extract_tokens_for_source(self, source: dict) -> Tuple[List[str], List[str]]:
         source_type = source["source_type"]
@@ -189,6 +227,7 @@ def build_indices_from_records(records: List[dict], content_index_path: str, tit
             "filename": filename,
             "title": title,
             "path": file_path,
+            "year": record.get("year"),
             "source_type": record.get("source_type", "local"),
             "source_url": record.get("source_url"),
         }

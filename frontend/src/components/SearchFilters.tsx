@@ -17,6 +17,8 @@ export default function SearchFilters({
   onYearChange,
   onDomainChange,
 }: SearchFiltersProps) {
+  const hasYearOptions = years.length > 0;
+
   return (
     <div className="grid gap-3 border-b border-zinc-100 bg-white px-6 py-3 sm:grid-cols-2">
       <label className="flex flex-col gap-1 text-xs font-medium uppercase tracking-wide text-zinc-500">
@@ -24,9 +26,10 @@ export default function SearchFilters({
         <select
           className="rounded-md border border-zinc-200 bg-white px-2 py-2 text-sm text-zinc-700"
           value={selectedYear}
+          disabled={!hasYearOptions}
           onChange={(event) => onYearChange(event.target.value)}
         >
-          <option value="all">All years</option>
+          <option value="all">{hasYearOptions ? "All years" : "Year not available"}</option>
           {years.map((year) => (
             <option key={year} value={year}>
               {year}

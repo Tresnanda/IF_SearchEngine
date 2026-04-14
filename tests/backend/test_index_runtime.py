@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import pytest
 
 from index_runtime import IndexRuntime
@@ -103,3 +104,23 @@ def test_bootstrap_seeds_from_legacy_root_indexes_when_available(tmp_path: Path)
     manifest = runtime.read_active_manifest()
     assert manifest.content_index_path.read_bytes() == b"legacy-content"
     assert manifest.title_index_path.read_bytes() == b"legacy-title"
+
+
+def test_read_active_manifest_maps_container_paths_to_workspace(tmp_path: Path, monkeypatch):
+    runtime = IndexRuntime(base_dir=tmp_path / "data" / "index")
+    runtime.base_dir.mkdir(parents=True, exist_ok=True)
+
+    payload = {
+        "version": "v1",
+        "doc_count": 2,
+        "built_at": "2026-01-01T00:00:00Z",
+        "content_index_path": "/app/content_index.pkl",
+        "title_index_path": "/app/title_index.pkl",
+    }
+    runtime.active_pointer_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    monkeypatch.chdir(tmp_path)
+    manifest = runtime.read_active_manifest()
+
+    assert manifest.content_index_path == tmp_path / "content_index.pkl"
+    assert manifest.title_index_path == tmp_path / "title_index.pkl"

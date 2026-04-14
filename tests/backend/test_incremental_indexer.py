@@ -19,7 +19,7 @@ def test_collect_records_reuses_cached_entries(tmp_path: Path):
 
     def fake_extract(file_path: Path, filename: str):
         calls.append(filename)
-        return [f"token-{filename}"], [f"title-{filename}"]
+        return f"resolved-{filename}", "2024", [f"token-{filename}"], [f"title-{filename}"]
 
     builder._extract_tokens_for_document = fake_extract  # type: ignore[attr-defined]
     records, stats, cache = builder.collect_records()
@@ -36,7 +36,7 @@ def test_collect_records_reuses_cached_entries(tmp_path: Path):
 
     def fake_extract_second(file_path: Path, filename: str):
         calls2.append(filename)
-        return [f"token-{filename}"], [f"title-{filename}"]
+        return f"resolved-{filename}", "2024", [f"token-{filename}"], [f"title-{filename}"]
 
     builder2._extract_tokens_for_document = fake_extract_second  # type: ignore[attr-defined]
     records2, stats2, _ = builder2.collect_records()
@@ -58,7 +58,7 @@ def test_collect_records_tracks_updates_and_deletes(tmp_path: Path):
     cache_path = tmp_path / "document_cache.json"
 
     builder = IncrementalIndexBuilder(str(dataset_dir), str(cache_path))
-    builder._extract_tokens_for_document = lambda p, n: ([f"token-{n}"], [f"title-{n}"])  # type: ignore[attr-defined]
+    builder._extract_tokens_for_document = lambda p, n: (f"resolved-{n}", "2024", [f"token-{n}"], [f"title-{n}"])  # type: ignore[attr-defined]
     _, _, cache = builder.collect_records()
     builder.save_cache(cache)
 
@@ -70,7 +70,7 @@ def test_collect_records_tracks_updates_and_deletes(tmp_path: Path):
 
     def fake_extract(file_path: Path, filename: str):
         calls.append(filename)
-        return [f"updated-{filename}"], [f"title-{filename}"]
+        return f"resolved-{filename}", "2025", [f"updated-{filename}"], [f"title-{filename}"]
 
     builder2._extract_tokens_for_document = fake_extract  # type: ignore[attr-defined]
     records, stats, cache2 = builder2.collect_records()
@@ -95,12 +95,13 @@ def test_collect_records_supports_gdrive_sources(tmp_path: Path):
     ]
 
     builder = IncrementalIndexBuilder(str(tmp_path), str(cache_path), sources=sources)
-    builder._extract_tokens_for_source = lambda source: (["token"], ["title"])  # type: ignore[attr-defined]
+    builder._extract_tokens_for_source = lambda source: ("GDrive Thesis", "2024", ["token"], ["title"])  # type: ignore[attr-defined]
 
     records, stats, cache = builder.collect_records()
 
     assert len(records) == 1
     assert records[0]["source_type"] == "gdrive"
     assert records[0]["source_url"] == "https://drive.google.com/file/d/abc/view"
+    assert records[0]["year"] == "2024"
     assert stats["created"] == 1
     assert cache["gdrive_abc.pdf"].source_type == "gdrive"

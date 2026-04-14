@@ -76,6 +76,7 @@ def test_incremental_build_fn_includes_gdrive_sources(monkeypatch, tmp_path: Pat
                 {
                     "filename": "local.docx",
                     "title": "Local",
+                    "year": "2024",
                     "path": str(dataset / "local.docx"),
                     "source_type": "local",
                     "source_url": None,
@@ -85,6 +86,7 @@ def test_incremental_build_fn_includes_gdrive_sources(monkeypatch, tmp_path: Pat
                 {
                     "filename": "gdrive_abc.pdf",
                     "title": "Drive",
+                    "year": "2023",
                     "path": "",
                     "source_type": "gdrive",
                     "source_url": "https://drive.google.com/file/d/abc/view",
@@ -108,3 +110,28 @@ def test_incremental_build_fn_includes_gdrive_sources(monkeypatch, tmp_path: Pat
 
     assert doc_count == 2
     assert stats["created"] == 2
+
+
+def test_incremental_build_fn_returns_zero_when_no_sources(monkeypatch, tmp_path: Path):
+    dataset = tmp_path / "dataset"
+    dataset.mkdir()
+    cache_path = tmp_path / "doc_cache.json"
+
+    monkeypatch.setattr(backend, "DOWNLOADS_DIR", str(dataset))
+    monkeypatch.setattr(backend, "DOCUMENT_CACHE_PATH", str(cache_path))
+
+    from backend import Thesis, db
+
+    with backend.app.app_context():
+        Thesis.query.delete()
+        db.session.commit()
+
+    content_target = tmp_path / "content_index.pkl"
+    title_target = tmp_path / "title_index.pkl"
+
+    doc_count, stats = backend._build_indices_incremental(str(content_target), str(title_target))
+
+    assert doc_count == 0
+    assert stats == {"created": 0, "updated": 0, "reused": 0, "deleted": 0}
+    assert not content_target.exists()
+    assert not title_target.exists()

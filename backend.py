@@ -33,6 +33,8 @@ FEEDBACK_LOG_PATH = "search_feedback_log.json"
 INDEX_STORE_DIR = os.getenv("INDEX_STORE_DIR", "data/index")
 DOCUMENT_CACHE_PATH = os.getenv("DOCUMENT_CACHE_PATH", os.path.join(INDEX_STORE_DIR, "document_cache.json"))
 REINDEX_MODE = os.getenv("REINDEX_MODE", "incremental").lower()
+INDEX_REQUIRED_ATTRS = ("index", "df", "doc_metadata", "doc_lengths", "num_docs", "avg_doc_length")
+YEAR_CACHE: dict[str, str | None] = {}
 
 
 def _extract_gdrive_file_id(url: str) -> str | None:
@@ -149,9 +151,45 @@ def _load_pickle(path):
         return pickle.load(f)
 
 
+def _is_valid_index_object(index_obj) -> bool:
+    return all(hasattr(index_obj, attr) for attr in INDEX_REQUIRED_ATTRS)
+
+
+def _activate_legacy_root_manifest_if_valid() -> bool:
+    content_path = Path(CONTENT_INDEX_PATH).resolve()
+    title_path = Path(TITLE_INDEX_PATH).resolve()
+    if not content_path.exists() or not title_path.exists():
+        return False
+
+    try:
+        content_index = _load_pickle(content_path)
+        title_index = _load_pickle(title_path)
+    except Exception:
+        return False
+
+    if not _is_valid_index_object(content_index) or not _is_valid_index_object(title_index):
+        return False
+
+    index_runtime.set_active_manifest(
+        ActiveManifest(
+            version=f"legacy-root-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}",
+            doc_count=getattr(content_index, "num_docs", 0),
+            built_at=datetime.utcnow().isoformat() + "Z",
+            content_index_path=content_path,
+            title_index_path=title_path,
+        )
+    )
+    return True
+
+
 def _build_engine_from_manifest(manifest):
     content_index = _load_pickle(manifest.content_index_path)
     title_index = _load_pickle(manifest.title_index_path)
+
+    for index_name, index_obj in (("content", content_index), ("title", title_index)):
+        if not _is_valid_index_object(index_obj):
+            raise RuntimeError(f"Invalid index object in {index_name} index snapshot")
+
     return HybridSearchEngine(content_index, title_index)
 
 def load_engine():
@@ -185,6 +223,10 @@ def _on_reindex_success(manifest) -> None:
 
 def initialize_engine_for_startup() -> bool:
     if load_engine():
+        return True
+
+    print("Active snapshot failed. Trying legacy root indices before rebuild.")
+    if _activate_legacy_root_manifest_if_valid() and load_engine():
         return True
 
     print("Failed to start application due to missing indices.")
@@ -259,6 +301,61 @@ def _extract_year_from_title(title: str) -> str | None:
 
     match = re.search(r"\b(19|20)\d{2}\b", title)
     return match.group(0) if match else None
+
+
+def _extract_year_from_text(text: str) -> str | None:
+    if not text:
+        return None
+
+    current_year = datetime.utcnow().year
+    matches = [int(value) for value in re.findall(r"\b(19\d{2}|20\d{2})\b", text)]
+    candidates = [value for value in matches if 1990 <= value <= current_year + 1]
+    if not candidates:
+        return None
+    return str(max(candidates))
+
+
+def _extract_year_from_document(file_path: str) -> str | None:
+    if not file_path:
+        return None
+    if file_path in YEAR_CACHE:
+        return YEAR_CACHE[file_path]
+
+    if not os.path.exists(file_path):
+        YEAR_CACHE[file_path] = None
+        return None
+
+    year = None
+    try:
+        if file_path.lower().endswith('.pdf'):
+            with open(file_path, 'rb') as file:
+                pdf_reader = PyPDF2.PdfReader(file)
+                if pdf_reader.pages:
+                    year = _extract_year_from_text(pdf_reader.pages[0].extract_text() or "")
+        elif file_path.lower().endswith('.docx'):
+            doc = docx.Document(file_path)
+            excerpt = "\n".join(para.text for para in doc.paragraphs[:60])
+            year = _extract_year_from_text(excerpt)
+    except Exception:
+        year = None
+
+    YEAR_CACHE[file_path] = year
+    return year
+
+
+def _resolve_result_year(title: str, metadata: dict) -> str | None:
+    year = metadata.get("year")
+    if isinstance(year, int):
+        return str(year)
+    if isinstance(year, str) and year.strip():
+        return year.strip()
+
+    title_year = _extract_year_from_title(title)
+    if title_year:
+        return title_year
+
+    path = metadata.get("path", "")
+    return _extract_year_from_document(path)
 
 
 def _detect_domain_from_title(title: str) -> str:
@@ -435,7 +532,7 @@ def search():
                     "content_score": content_score,
                     "title_score": title_score,
                     "snippet": snippet,
-                    "year": _extract_year_from_title(title),
+                    "year": _resolve_result_year(title, metadata),
                     "domain": _detect_domain_from_title(title),
                 })
 
@@ -499,6 +596,9 @@ def _build_indices_incremental(content_path: str, title_path: str) -> int:
                     'source_type': 'local',
                     'source_url': None,
                 })
+
+    if not sources:
+        return 0, {"created": 0, "updated": 0, "reused": 0, "deleted": 0}
 
     builder = IncrementalIndexBuilder(DOWNLOADS_DIR, DOCUMENT_CACHE_PATH, sources=sources)
     records, stats, cache = builder.collect_records()

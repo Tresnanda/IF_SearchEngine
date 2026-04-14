@@ -119,8 +119,8 @@ class IndexRuntime:
             version=data["version"],
             doc_count=data["doc_count"],
             built_at=data["built_at"],
-            content_index_path=Path(data["content_index_path"]),
-            title_index_path=Path(data["title_index_path"]),
+            content_index_path=self._resolve_manifest_path(data["content_index_path"]),
+            title_index_path=self._resolve_manifest_path(data["title_index_path"]),
         )
 
     def recover_active_manifest(self) -> ActiveManifest:
@@ -171,9 +171,26 @@ class IndexRuntime:
             version=data["version"],
             doc_count=data["doc_count"],
             built_at=data["built_at"],
-            content_index_path=Path(data["content_index_path"]),
-            title_index_path=Path(data["title_index_path"]),
+            content_index_path=self._resolve_manifest_path(data["content_index_path"]),
+            title_index_path=self._resolve_manifest_path(data["title_index_path"]),
         )
+
+    def _resolve_manifest_path(self, raw_path: str) -> Path:
+        path = Path(raw_path)
+        if path.exists():
+            return path
+
+        project_root = self.base_dir.resolve().parents[1]
+        if path.is_absolute() and len(path.parts) >= 2 and path.parts[1] == "app":
+            mapped = project_root / Path(*path.parts[2:])
+            return mapped
+
+        if not path.is_absolute():
+            mapped = project_root / path
+            if mapped.exists():
+                return mapped
+
+        return path
 
     def _write_snapshot_manifest(self, snapshot_dir: Path, payload: dict) -> None:
         self._write_atomic_json(snapshot_dir / "manifest.json", payload)
