@@ -19,6 +19,7 @@ COPY backend.py .
 COPY main.py .
 copy compressor.py .
 copy indexer.py .
+copy incremental_indexer.py .
 copy invertedindex.py .
 copy index_runtime.py .
 copy preprocessor.py .
