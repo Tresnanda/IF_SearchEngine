@@ -8,6 +8,8 @@ A thesis-focused Information Retrieval system using a traditional BM25 stack (no
 - Snippet generation around matched terms.
 - Admin panel for upload, delete, and async reindex control.
 - Runtime-safe reindex flow with active/candidate index snapshots.
+- Incremental reindex support with document cache reuse.
+- Google Drive source ingestion (public-share links) with redirect-based access.
 
 ## Tech Stack
 ### Backend
@@ -56,10 +58,26 @@ A thesis-focused Information Retrieval system using a traditional BM25 stack (no
 - `ADMIN_EMAIL`: admin login email.
 - `ADMIN_PASSWORD`: admin login password.
 
+### Optional Environment Variables
+- `REINDEX_MODE`: `incremental` (default) or `full`.
+- `DOCUMENT_CACHE_PATH`: cache path for incremental source fingerprinting (default: `data/index/document_cache.json`).
+
 ### Reindex Behavior
 - Reindex runs asynchronously via admin trigger.
 - Search stays online using last successful active index while candidate index is rebuilt.
 - On failure, active index remains unchanged.
+- Reindex status endpoint now includes mode/stats payload for incremental runs:
+  - `mode`: `incremental` or `full`
+  - `stats`: `created`, `updated`, `reused`, `deleted`
+
+### Mixed Source Repository (Local + Google Drive)
+- Local upload is still supported (`/admin/upload`).
+- Admin can add public-share Google Drive links (`/admin/source/gdrive`).
+- During indexing, GDrive documents are fetched temporarily for extraction and indexing.
+- At search result click/open time:
+  - local docs use backend `/files/<filename>`
+  - GDrive docs redirect to stored Drive URL
+- This keeps index/search local and fast while file serving can stay remote.
 
 ### Health Endpoints
 - Liveness: `GET /health/live`
@@ -138,7 +156,8 @@ bash scripts/smoke/test_compose_health.sh
 ### 7) First Reindex on VPS
 1. Login to admin page (`/login`) using `ADMIN_EMAIL` + `ADMIN_PASSWORD`.
 2. Upload files if needed.
-3. Trigger reindex from admin panel.
+3. (Optional) Add Google Drive public-share links from admin panel.
+4. Trigger reindex from admin panel.
 4. Monitor reindex status in admin page.
 
 ### 8) Reverse Proxy + HTTPS (Recommended)

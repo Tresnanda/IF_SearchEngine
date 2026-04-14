@@ -14,6 +14,7 @@ This project is an **Information Retrieval System** built for a university thesi
 - **`test_docx_indexer.py`**: The build script used to generate the `.pkl` indices. You must run this script after adding new documents.
 - **`index_runtime.py`**: Active/candidate index manifest manager for safe snapshot switching and fallback.
 - **`reindex_service.py`**: Async reindex job state machine with single-job lock and status reporting.
+- **`incremental_indexer.py`**: Incremental source collector/cache builder for mixed local + GDrive indexing flow.
 - **`scraper.py`**: A custom script built to bypass Google Drive rate limits using a hybrid `curl`/`gdown` approach. It reads a `.csv` file and downloads thesis files to `new_dataset/`.
 
 ### Frontend (Next.js/React)
@@ -32,10 +33,12 @@ This project is an **Information Retrieval System** built for a university thesi
 - **Absolute Paths**: When writing shell commands for agents to run, always verify the current working directory. The frontend is in the `frontend/` subdirectory.
 - **Admin Security**: Never hardcode admin tokens/credentials in client-side code. Use NextAuth session checks and env-based internal token forwarding from server routes.
 - **Ops Safety**: Preserve active-index behavior during reindex. Do not introduce any in-place overwrite strategy for serving index files.
+- **Source Model**: Repository supports `local` and `gdrive` thesis sources. For `gdrive`, index from temporary fetch and keep redirect URL as source-of-truth for access.
 
 ## VPS Deployment Notes
 - Use Docker Compose as the default deployment method.
 - Required env vars in production-like environments: `ADMIN_INTERNAL_TOKEN`, `NEXTAUTH_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `BACKEND_URL`, `NEXTAUTH_URL`.
+- Optional reindex env vars: `REINDEX_MODE` (`incremental` or `full`), `DOCUMENT_CACHE_PATH`.
 - Required persistent directories: `new_dataset/`, `data/index/`, `data/db/`.
 - Health endpoints for probes: `/health/live`, `/health/ready`.
 - Reindex policy: system must keep serving last successful index while candidate build runs.
